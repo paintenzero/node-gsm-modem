@@ -1,0 +1,11 @@
+{
+  "name": "modem_controller",
+  "description": "A package for controlling gsm modem connected to serial port using AT commands",
+  "author": "Sergey Birukov <sergeyb26@gmail.com>",
+  "dependencies": {
+    "serialport": "~> 1.4"
+  },
+  "engines": {
+    "node" : ">=0.10"
+  }
+}

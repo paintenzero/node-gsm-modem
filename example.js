@@ -39,7 +39,7 @@ modem1.connect(function () {
         receiver : 'ENTER YOUR NUMBER HERE',
         text : 'Проверка связи, однако!',
         request_status : true
-    }, function (data) {
+    }, function (err, data) {
         console.log('sendSMS', data);
     });
 

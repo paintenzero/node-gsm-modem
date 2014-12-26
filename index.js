@@ -67,6 +67,9 @@ function Modem(opts) {
     if (undefined !== opts.cents_regexp) {
         this.centsRegexp = opts.cents_regexp;
     }
+    if (undefined !== opts.debug) {
+        this.debug = opts.debug;
+    }
 
 
     this.commandsStack = [];
@@ -205,14 +208,15 @@ Modem.prototype.onData = function (data) {
         if (this.commandsStack.length > 0) {
             var cmd = this.commandsStack[0];
             var b_Finished = false;
-            if (cmd.waitCommand !== null) {
+
+            if (-1 !== lastLine.indexOf('ERROR') || -1 !== lastLine.indexOf('NOT SUPPORT')) {
+                b_Finished = true;
+            } else if (cmd.waitCommand !== null) {
                 if (-1 !== resp.indexOf(cmd.waitCommand)) {
                     b_Finished = true;
                 }
-            } else {
-                if (-1 !== lastLine.indexOf('OK') || -1 !== lastLine.indexOf('ERROR') || -1 !== lastLine.indexOf('NOT SUPPORT')) {
-                    b_Finished = true;
-                }
+            } else if (-1 !== lastLine.indexOf('OK')) {
+                b_Finished = true;
             }
             if (b_Finished) {
                 this.commandsStack.splice(0, 1);
@@ -406,7 +410,7 @@ Modem.prototype.sendSMS = function (message, cb) {
         cb(new Error('Either receiver or text is specified'));
         return;
     }
-
+    
     if (!this.textMode) {
         var opts = message;
         if (opts.receiver_type === undefined) {
@@ -425,7 +429,7 @@ Modem.prototype.sendSMS = function (message, cb) {
                 references.push(-999);
             }
             if (references.length === encoded.length) {
-                cb(references);
+                cb(undefined, references);
             }
         };
         for (i = 0; i < encoded.length; ++i) {
@@ -438,7 +442,7 @@ Modem.prototype.sendSMS = function (message, cb) {
 Modem.prototype.deleteAllSMS = function (cb) {
     this.sendCommand('AT+CMGD=1,4', function (data) {
         if (typeof cb === 'function') {
-            if (data.indexOf('OK') === -1) {
+            if (-1 === data.indexOf('OK')) {
                 cb(new Error(data));
             } else {
                 cb(undefined);
@@ -530,7 +534,7 @@ Modem.prototype.getModel = function (cb) {
     "use strict";
     this.sendCommand('AT+CGMM', function (data) {
         if (typeof cb === 'function') {
-            if (data.indexOf('OK') !== -1) {
+            if (data.indexOf('OK') === -1) {
                 cb(new Error(data));
             } else {
                 cb(undefined, data.split('\r\n')[0]);
@@ -546,7 +550,7 @@ Modem.prototype.getModel = function (cb) {
 Modem.prototype.getOperator = function (text, cb) {
     "use strict";
     this.sendCommand('AT+COPS=3,' + (text ? '0' : '2') + ';+COPS?', function (operator) {
-        var match = operator.match(/\+COPS: (\d*),(\d*),"?(\w+)"?,(\d*)/);
+        var match = operator.match(/\+COPS: (\d*),(\d*),"?([\w ]+)"?,(\d*)/);
         if (typeof cb === 'function') {
             if (null !== match && 4 < match.length) {
                 cb(undefined, match[3]);

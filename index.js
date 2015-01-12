@@ -433,7 +433,9 @@ Modem.prototype.sendSMS = function (message, cb) {
             }
         };
         for (i = 0; i < encoded.length; ++i) {
-            this.sendCommand('AT+CMGS=' + encoded[i].tpdu_length + '\r' + encoded[i].smsc_tpdu + String.fromCharCode(26), onSMSSend);
+            this.sendCommand('AT+CMGS=' + encoded[i].tpdu_length, function(data){
+            }, '>');
+            this.sendCommand(encoded[i].smsc_tpdu + String.fromCharCode(26), onSMSSend);
         }
     }
     //TODO: make textmode
@@ -550,7 +552,7 @@ Modem.prototype.getModel = function (cb) {
 Modem.prototype.getOperator = function (text, cb) {
     "use strict";
     this.sendCommand('AT+COPS=3,' + (text ? '0' : '2') + ';+COPS?', function (operator) {
-        var match = operator.match(/\+COPS: (\d*),(\d*),"?([\w ]+)"?,(\d*)/);
+        var match = operator.match(/\+COPS: (\d*),(\d*),"?([\w -]+)"?,(\d*)/);
         if (typeof cb === 'function') {
             if (null !== match && 4 < match.length) {
                 cb(undefined, match[3]);

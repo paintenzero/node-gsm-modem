@@ -317,11 +317,8 @@ pduParser.generate = function(message) {
 
     if (message.request_status!==undefined && message.request_status)
     	submit = submit | TPSRR;
-
     pdu += ('00'+submit.toString(16)).slice(-2);
-
     pdu += '00'; //Reference Number;
-
     var receiverSize = ('00'+(parseInt(message.receiver.length, 10).toString(16))).slice(-2);
     var receiver = pduParser.swapNibbles(message.receiver);
     
@@ -332,9 +329,7 @@ pduParser.generate = function(message) {
     } else {
         receiverType = 81;
     }
-    
     pdu += receiverSize.toString(16) + receiverType + receiver;
-
     pdu += '00'; //TODO TP-PID
 
     if(message.encoding === '16bit')
@@ -383,7 +378,6 @@ pduParser.generate = function(message) {
                 var size = 7 + text.length;
             }
             else {
-            	console.log ('encode7Bit', text);
                 user_data = pduParser.encode7Bit(text);
                 var size = text.length;
             }

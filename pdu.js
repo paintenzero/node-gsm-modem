@@ -43,6 +43,7 @@ pduParser.parse = function(pdu) {
     var dataCodingScheme = pdu.slice(cursor, cursor+2);
     cursor = cursor+2;
 
+    obj.dcs = parseInt(dataCodingScheme, 16);
     obj.encoding = pduParser.detectEncoding(dataCodingScheme);
 
 
@@ -106,12 +107,12 @@ pduParser.parse = function(pdu) {
 }
 
 pduParser.detectEncoding = function(dataCodingScheme) {
-    var binary = ('00000000'+(parseInt(dataCodingScheme, 16).toString(2))).slice(-8);
-
+    if (typeof dataCodingScheme === 'string') dataCodingScheme = parseInt(dataCodingScheme, 16);
+    var binary = ('00000000'+(dataCodingScheme.toString(2))).slice(-8);
     if(binary == '00000000')
         return '7bit';
 
-    if(binary.slice(0, 2) === '00') {
+    // if(binary.slice(0, 2) === '00') {
         var compressed = binary.slice(2, 1) === '1';
         var bitsHaveMeaning = binary.slice(3, 1) === '1';
 
@@ -123,7 +124,7 @@ pduParser.detectEncoding = function(dataCodingScheme) {
 
         if(binary.slice(4,6) === '10')
             return '16bit';
-    }
+    // }
 }
 
 pduParser.decode16Bit = function(data, length) {
@@ -324,7 +325,7 @@ pduParser.generate = function(message) {
     
 	//Destination MSISDN type
     var receiverType;
-    if (message.receiver_type!==undefined && (message.receiver_type==0x81 || message.receiver_type==0x91)){
+    if (message.receiver_type !== undefined && (message.receiver_type === 0x81 || message.receiver_type === 0x91)){
         receiverType = message.receiver_type.toString(16);
     } else {
         receiverType = 81;

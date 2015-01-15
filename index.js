@@ -305,9 +305,9 @@ Modem.prototype.configureNotifications = function () {
 
 Modem.prototype.disableStatusNotifications = function () {
   "use strict";
-  this.sendCommand('AT+CUPS?', function (data) {
+  this.sendCommand('AT^CURC?', function (data) {
     if (data.indexOf('COMMAND NOT SUPPORT') === -1) {
-      this.sendCommand('AT+CUPS=0');
+      this.sendCommand('AT^CURC=0');
     }
   }.bind(this));
 };

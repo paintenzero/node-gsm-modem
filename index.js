@@ -302,7 +302,7 @@ Modem.prototype.disableStatusNotifications = function () {
     if (data.indexOf('COMMAND NOT SUPPORT') === -1) {
       this.sendCommand('AT+CUPS=0');
     }
-  });
+  }.bind(this));
 };
 
 /**

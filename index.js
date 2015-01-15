@@ -39,12 +39,13 @@ function isGSMAlphabet(text) {
  * Possible options:
  *  port
  *  notify_port
- *  onDisconnect
+ *  debug
  *
  * Extends EventEmitter. Events:
  *  message - new SMS has arrived
- *  report
+ *  report - SMS status report has arrived
  *  USSD - USSD has arrived
+ *  disconnect - 
  */
 function Modem(opts) {
   "use strict";
@@ -65,15 +66,6 @@ function Modem(opts) {
     this.notificationBufferCursor = 0;
   }
 
-  if (undefined !== opts.balance_ussd) {
-    this.balanceUSSD = opts.balance_ussd;
-  }
-  if (undefined !== opts.dollar_regexp) {
-    this.dollarRegexp = opts.dollar_regexp;
-  }
-  if (undefined !== opts.cents_regexp) {
-    this.centsRegexp = opts.cents_regexp;
-  }
   if (undefined !== opts.debug) {
     this.debug = opts.debug;
   }
@@ -87,9 +79,6 @@ function Modem(opts) {
   this.textMode = false;
   this.echoMode = false;
 
-  if (opts.onDisconnect !== undefined) {
-    this.onDisconnect = opts.onDisconnect;
-  }
   this.notifyReconnectRetries = 0;
   this.ussdTimeout = opts.ussdTimeout || 15000;
 }
@@ -115,9 +104,7 @@ Modem.prototype.connect = function (cb) {
   }.bind(this));
   this.serialPort.on('close', function () {
     this.isOpened = false;
-    if (this.onDisconnect !== 'undefined') {
-      this.onDisconnect(this);
-    }
+    this.emit('disconnect');
   }.bind(this));
   this.serialPort.on('data', this.onData.bind(this));
 
@@ -130,7 +117,10 @@ Modem.prototype.connect = function (cb) {
  */
 Modem.prototype.connectNotificationPort = function (cb) {
   "use strict";
-  if (this.notifyReconnectRetries > 10) { return; }
+  if (this.notifyReconnectRetries > 10) {
+    console.error('Notification port open error');
+    return;
+  }
   this.notifySerialPort = new SerialPort(this.notifyPort, {
     baudrate: 19200
   });
@@ -296,6 +286,7 @@ Modem.prototype.configureModem = function () {
   this.setEchoMode(false);
   this.setTextMode(false);
   this.configureNotifications();
+  this.disableStatusNotifications();
 };
 /**
  * Setting notifications
@@ -303,6 +294,15 @@ Modem.prototype.configureModem = function () {
 Modem.prototype.configureNotifications = function () {
   "use strict";
   this.sendCommand('AT+CNMI=2,1,0,2,0');
+};
+
+Modem.prototype.disableStatusNotifications = function () {
+  "use strict";
+  this.sendCommand('AT+CUPS?', function (data) {
+    if (data.indexOf('COMMAND NOT SUPPORT') === -1) {
+      this.sendCommand('AT+CUPS=0');
+    }
+  });
 };
 
 /**
@@ -503,61 +503,14 @@ Modem.prototype.deleteSMS = function (smsId, cb) {
 };
 
 /**
- * Requests the balance
- */
-Modem.prototype.getBalance = function (cb) {
-  "use strict";
-  if (undefined === this.balanceUSSD) {
-    if (typeof cb === 'function') {
-      process.nextTick(function () {
-        cb(new Error('no balance ussd number provided!'));
-      });
-    }
-    return;
-  }
-  var encoded = Pdu.ussdEncode(this.balanceUSSD);
-  this.sendCommand('AT+CUSD=1,"' + encoded + '",15', function (data) {
-    if (typeof cb === 'function') {
-      var match = data.match(/\+CUSD:\s*(\d),"?([0-9A-F]+)"?,(\d*)/);
-      if (match !== null && match.length === 4) {
-        var text = Pdu.decode7Bit(match[2], match[2].length / 2);
-        console.log('balance text: %s', text);
-        var dol = 0,
-          cents = 0,
-          m;
-
-        if (this.dollarRegexp !== undefined) {
-          m = text.match(this.dollarRegexp);
-          if (m !== null && m.length === 2) {
-            dol = parseInt(m[1], 10);
-          }
-        }
-
-        if (undefined !== this.centsRegexp) {
-          m = text.match(this.centsRegexp);
-          if (m !== null && m.length === 2) {
-            cents = parseInt(m[1], 10);
-          }
-        }
-
-        if (typeof cb === 'function') { cb(undefined, dol + cents / 100); }
-      } else {
-        cb(new Error('BAD RESPONSE'));
-      }
-    }
-  }.bind(this), 'CUSD');
-};
-/**
  * Requests custom USSD
  */
 Modem.prototype.getUSSD = function (ussd, cb) {
   var encoded = Pdu.ussdEncode(ussd);
-  console.log('send command', 'AT+CUSD=1,"' + encoded + '",15');
   this.sendCommand('AT+CUSD=1,"' + encoded + '",15', function (data) {
     if (data.indexOf('OK') !== -1) {
       var processed = false;
       var USSDHandler = function (status, data, dcs) {
-        this.removeListener('USSD', USSDHandler);
         processed = true;
         if (status === 1) { //cancel USSD session
           this.sendCommand('AT+CUSD=2');
@@ -575,7 +528,7 @@ Modem.prototype.getUSSD = function (ussd, cb) {
         cb(undefined, text);
       }.bind(this);
 
-      this.on('USSD', USSDHandler);
+      this.once('USSD', USSDHandler);
       setTimeout(function () {
         if (!processed) {
           this.removeListener('USSD', USSDHandler);

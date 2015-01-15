@@ -40,42 +40,52 @@ function isGSMAlphabet(text) {
  *  port
  *  notify_port
  *  debug
+ *  auto_hangup
  *
  * Extends EventEmitter. Events:
  *  message - new SMS has arrived
  *  report - SMS status report has arrived
  *  USSD - USSD has arrived
- *  disconnect - 
+ *  disconnect - modem is disconnected
  */
 function Modem(opts) {
   "use strict";
   // Call the super constructor.
   EventEmitter.call(this);
 
-  if (undefined === opts.port) {
-    console.error('port is undefined');
+  this.ports = [];
+  if (undefined !== opts.port) {
+    this.ports.push(opts.port);
+  }
+  if (undefined !== opts.notify_port) {
+    this.ports.push(opts.notify_port);
+  }
+  if (undefined !== opts.ports) {
+    for (var i=0; i<opts.ports.length; ++i) {
+      this.ports.push(opts.ports[i]);
+    }
+  }
+
+  if (0 === this.ports.length) {
+    console.error('ports are undefined');
     return null;
   }
-  this.port = opts.port;
-  this.serialPort = null;
+  this.portErrors = 0;
+  this.portConnected = 0;
 
-  if (undefined !== opts.notify_port) {
-    this.notifyPort = opts.notify_port;
-    this.notifySerialPort = null;
-    this.notificationBuffer = new Buffer(1024);
-    this.notificationBufferCursor = 0;
-  }
+  this.serialPorts = [];
+  this.buffers = [];
+  this.bufferCursors = [];
+  this.dataPort = null;
 
   if (undefined !== opts.debug) {
     this.debug = opts.debug;
   }
-
+  // Auto hang up calls
+  this.autoHangup = opts.auto_hangup || false;
 
   this.commandsStack = [];
-  this.isOpened = false;
-  this.responseBuffer = new Buffer(128 * 1024);
-  this.responseBufferCursor = 0;
-
+  
   this.textMode = false;
   this.echoMode = false;
 
@@ -89,54 +99,93 @@ Modem.prototype.isGSMAlphabet = isGSMAlphabet;
  */
 Modem.prototype.connect = function (cb) {
   "use strict";
-  this.serialPort = new SerialPort(this.port, {
-    baudrate: 19200
-  });
-  this.serialPort.on('open', function () {
-    this.isOpened = true;
-    this.configureModem();
-    if (!this.notifyPort) {
-      cb();
-    }
-  }.bind(this));
-  this.serialPort.on('error', function (err) {
-    console.error('serial port', this.port, 'error:', err);
-  }.bind(this));
-  this.serialPort.on('close', function () {
-    this.isOpened = false;
-    this.emit('disconnect');
-  }.bind(this));
-  this.serialPort.on('data', this.onData.bind(this));
-
-  if (this.notifyPort) {
-    this.connectNotificationPort(cb);
+  var i = 0;
+  for (i; i < this.ports.length; ++i) {
+    var port = this.ports[i];
+    this.connectPort(port, cb);
   }
 };
 /**
- *
+ * Connect to the port
  */
-Modem.prototype.connectNotificationPort = function (cb) {
-  "use strict";
-  if (this.notifyReconnectRetries > 10) {
-    console.error('Notification port open error');
-    return;
-  }
-  this.notifySerialPort = new SerialPort(this.notifyPort, {
+Modem.prototype.connectPort = function (port, cb) {
+  var serialPort = new SerialPort(port, {
     baudrate: 19200
   });
-  this.notifySerialPort.on('open', function () {
-    this.notifyReconnectRetries = 0;
-    if (typeof cb === 'function') { cb(); }
+
+  var commandTimeout = null;
+
+  serialPort.on('open', function () {
+    serialPort.write('AT\r\n');
+    commandTimeout = setTimeout(function () {
+      this.onPortConnected(serialPort, 0, cb);
+    }.bind(this), 1000);
   }.bind(this));
-  this.notifySerialPort.on('error', function (err) {
-    console.error('notification serial port', this.notifyPort, 'error:', err);
+
+  serialPort.once('data', function (data) {
+    if (data.toString().indexOf('OK') !== -1) {
+      clearTimeout(commandTimeout);
+      this.onPortConnected(serialPort, 1, cb);
+    }
   }.bind(this));
-  this.notifySerialPort.on('close', function () {
-    ++this.notifyReconnectRetries;
-    this.connectNotificationPort();
+
+  serialPort.on('error', function (err) {
+    console.error('Port connect error: %s', err.message);
+    if (null !== commandTimeout) {
+      clearTimeout(commandTimeout);
+    }
+    this.onPortConnected(serialPort, -1, cb);
   }.bind(this));
-  this.notifySerialPort.on('data', this.onNotificationData.bind(this));
 };
+/**
+ * Callback for port connect or error. Data modes:
+ *   0 - notification
+ *   1 - data
+ *  -1 - error
+ */
+Modem.prototype.onPortConnected = function(port, dataMode, cb) {
+  if (dataMode === -1) {
+    ++this.portErrors;
+  } else {
+    ++this.portConnected;
+    this.serialPorts.push (port);
+
+    port.removeAllListeners('error');
+    port.on('error', this.serialPortError.bind(this));
+    port.on('close', this.serialPortClosed.bind(this));
+
+    var buf = new Buffer(1024);
+    var cursor = 0;
+    this.buffers.push(buf);
+    this.bufferCursors.push(cursor);
+
+    port.on('data', this.onData.bind(this, buf, cursor));
+    if (1 === dataMode) {
+      this.dataPort = port;
+    }
+  }
+
+  if (this.portErrors + this.portConnected === this.ports.length) {
+    if (null === this.dataPort) {
+      this.emit('error', new Error('NOT CONNECTED'));
+    } else {
+      this.configureModem(function () {
+        cb();
+      });      
+    }
+  }
+};
+
+Modem.prototype.serialPortError = function(err) {
+  console.error('Serial port %s error: %s (%d)', port, err.message, err.code);
+  this.emit('error', err);
+};
+
+Modem.prototype.serialPortClosed = function(err) {
+  console.log('Port was closed!');
+  this.emit('disconnect');
+};
+
 /**
  * Pushes command to commands stack
  */
@@ -174,7 +223,7 @@ Modem.prototype.__writeToSerial = function (cmd) {
   if (this.debug) {
     console.log(' ----->', cmd.toString());
   }
-  this.serialPort.write(cmd.toString(), function (err) {
+  this.dataPort.write(cmd.toString(), function (err) {
     if (err) {
       console.error('Error sending command:', cmd.toString(), 'error:', err);
       this.sendNext();
@@ -182,24 +231,43 @@ Modem.prototype.__writeToSerial = function (cmd) {
   }.bind(this));
 };
 /**
- *
+ * 
  */
-Modem.prototype.onData = function (data) {
+Modem.prototype.onData = function (buffer, cursor, data) {
   "use strict";
   if (this.debug) {
-    console.log(' <--------', data.toString());
+    console.log(' <-----', data.toString());
   }
-  if (this.responseBufferCursor + data.length > this.responseBuffer.length) { //Buffer overflow
+  if (cursor + data.length > buffer.length) { //Buffer overflow
     console.error('Data buffer overflow');
-    this.responseBufferCursor = 0;
+    cursor = 0;
   }
-  data.copy(this.responseBuffer, this.responseBufferCursor);
-  this.responseBufferCursor += data.length;
-  var resp = this.responseBuffer.slice(0, this.responseBufferCursor - 1).toString().trim();
+  data.copy(buffer, cursor);
+  cursor += data.length;
+  var resp = buffer.slice(0, cursor - 1).toString().trim();
   var arr = resp.split('\r\n');
 
   if (arr.length > 0) {
-    var lastLine = (arr[arr.length - 1]).trim();
+    //TODO: handle notification lines here
+    var i, arrLength = arr.length, hadNotification = false;
+    for (i = arrLength - 1; i >= 0; --i) {
+      if (this.handleNotification(arr[i])) {
+        arr.splice(i, 1);
+        --arrLength;
+        hadNotification = true;
+      }
+    }
+    if (hadNotification) {
+      if (arrLength > 0) {
+        var b = new Buffer(arr.join('\r\n'));
+        b.copy(buffer, 0);
+        cursor = b.length;
+      } else {
+        cursor = 0;
+        return;
+      }
+    }
+    var lastLine = (arr[arrLength - 1]).trim();
 
     if (this.commandsStack.length > 0) {
       var cmd = this.commandsStack[0];
@@ -220,89 +288,81 @@ Modem.prototype.onData = function (data) {
           arr.splice(0, 1);
         }
         cmd.doCallback(resp);
-        this.responseBufferCursor = 0;
+        cursor = 0;
         this.sendNext();
       }
+    } else {
+      console.log('Unhandled command: %s', resp);
     }
-  } else {
-    this.onNotificationData(resp);
-  }
+  } 
 };
 /**
- * On data received from notification serial port
- * @param data buffer received
+ *
  */
-Modem.prototype.onNotificationData = function (data) {
-  "use strict";
-  if (this.debug) {
-    console.log(' <========', data.toString());
-  }
-  if (this.notificationBufferCursor + data.length > this.notificationBuffer.length) { //Buffer overflow
-    console.error('Notification buffer overflow');
-    this.notificationBufferCursor = 0;
-  }
-  data.copy(this.notificationBuffer, this.notificationBufferCursor);
-  this.notificationBufferCursor += data.length;
-  if (this.notificationBuffer.slice(this.notificationBufferCursor - 2, this.notificationBufferCursor).toString() === '\r\n') {
-    var notif = data.toString().trim();
-    var smsId, match;
-    if (notif.substr(0, 5) === '+CMTI') {
-      match = notif.match(/\+CMTI:\s*"?([A-Za-z0-9]+)"?,(\d+)/);
-      if (null !== match && match.length > 2) {
-        smsId = parseInt(match[2], 10);
-        this.getSMS(smsId, function (err, msg) {
-          if (err === undefined) {
-            this.deleteSMS(smsId, function (err) {
-              if (err) {
-                console.error('Unable to delete incoming message!!', err.message);
-              }
-            });
-            this.emit('message', msg);
-          }
-        }.bind(this));
-      }
-    } else if (notif.substr(0, 5) === '+CDSI') {
-      match = notif.match(/\+CDSI:\s*"?([A-Za-z0-9]+)"?,(\d+)/);
-      if (null !== match && match.length > 2) {
-        smsId = parseInt(match[2], 10);
-        this.getSMS(smsId, function (err, msg) {
-          if (err === undefined) {
-            this.deleteSMS(smsId, function (err) {
-              if (err) {
-                console.error('Unable to delete incoming report!!', err.message);
-              }
-            });
-            this.emit('report', msg);
-          }
-        }.bind(this));
-      }
-    } else if (notif.substr(0, 5) === '+CUSD') {
-      match = notif.match(/\+CUSD:\s*(\d),"?([0-9A-F]+)"?,(\d*)/);
-      if (match !== null && match.length === 4) {
-        this.emit('USSD', parseInt(match[1], 10), match[2], parseInt(match[3], 10));
-      }
+Modem.prototype.handleNotification = function(line) {
+  var handled = false;
+
+  if (line.substr(0, 5) === '+CMTI') {
+    match = line.match(/\+CMTI:\s*"?([A-Za-z0-9]+)"?,(\d+)/);
+    if (null !== match && match.length > 2) {
+      smsId = parseInt(match[2], 10);
+      this.getSMS(smsId, function (err, msg) {
+        if (err === undefined) {
+          this.deleteSMS(smsId, function (err) {
+            if (err) {
+              console.error('Unable to delete incoming message!!', err.message);
+            }
+          });
+          this.emit('message', msg);
+        }
+      }.bind(this));
     }
-    this.notificationBufferCursor = 0;
+    handled = true;
+  } else if (line.substr(0, 5) === '+CDSI') {
+    match = line.match(/\+CDSI:\s*"?([A-Za-z0-9]+)"?,(\d+)/);
+    if (null !== match && match.length > 2) {
+      smsId = parseInt(match[2], 10);
+      this.getSMS(smsId, function (err, msg) {
+        if (err === undefined) {
+          this.deleteSMS(smsId, function (err) {
+            if (err) {
+              console.error('Unable to delete incoming report!!', err.message);
+            }
+          });
+          this.emit('report', msg);
+        }
+      }.bind(this));
+    }
+    handled = true;
+  } else if (line.substr(0, 5) === '+CUSD') {
+    match = line.match(/\+CUSD:\s*(\d),"?([0-9A-F]+)"?,(\d*)/);
+    if (match !== null && match.length === 4) {
+      this.emit('USSD', parseInt(match[1], 10), match[2], parseInt(match[3], 10));
+    }
+    handled = true;
+  } else if (line.substr(0, 4) === 'RING') {
+    if (this.autoHangup) {
+      this.sendCommand('ATH');
+    }
+    handled = true;
   }
+  return handled;
 };
 /**
  * Configures modem
  */
-Modem.prototype.configureModem = function () {
+Modem.prototype.configureModem = function (cb) {
   "use strict";
   this.setEchoMode(false);
   this.setTextMode(false);
-  this.configureNotifications();
   this.disableStatusNotifications();
+  this.sendCommand('AT+CNMI=2,1,0,2,0', function (data) {
+    cb();
+  });
 };
 /**
- * Setting notifications
+ * Disables ^RSSI status notifications
  */
-Modem.prototype.configureNotifications = function () {
-  "use strict";
-  this.sendCommand('AT+CNMI=2,1,0,2,0');
-};
-
 Modem.prototype.disableStatusNotifications = function () {
   "use strict";
   this.sendCommand('AT^CURC?', function (data) {
@@ -311,7 +371,6 @@ Modem.prototype.disableStatusNotifications = function () {
     }
   }.bind(this));
 };
-
 /**
  * Sets modem's text mode
  * @param textMode boolean

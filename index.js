@@ -189,7 +189,10 @@ Modem.prototype.onData = function (data) {
   if (this.debug) {
     console.log(' <--------', data.toString());
   }
-
+  if (this.responseBufferCursor + data.length > this.responseBuffer.length) { //Buffer overflow
+    console.error('Data buffer overflow');
+    this.responseBufferCursor = 0;
+  }
   data.copy(this.responseBuffer, this.responseBufferCursor);
   this.responseBufferCursor += data.length;
   var resp = this.responseBuffer.slice(0, this.responseBufferCursor - 1).toString().trim();
@@ -233,6 +236,10 @@ Modem.prototype.onNotificationData = function (data) {
   "use strict";
   if (this.debug) {
     console.log(' <========', data.toString());
+  }
+  if (this.notificationBufferCursor + data.length > this.notificationBuffer.length) { //Buffer overflow
+    console.error('Notification buffer overflow');
+    this.notificationBufferCursor = 0;
   }
   data.copy(this.notificationBuffer, this.notificationBufferCursor);
   this.notificationBufferCursor += data.length;

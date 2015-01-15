@@ -13,6 +13,7 @@ pduParser.parse = function(pdu) {
     var cursor = 0;
 
     var obj = parseSMSCPart (pdu);
+    obj.smsc_tpdu = pdu;
     cursor += obj.length;
 
     var buffer = new Buffer(pdu.slice(cursor,cursor+6), 'hex');

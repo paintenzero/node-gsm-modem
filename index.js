@@ -61,7 +61,8 @@ function Modem(opts) {
     this.ports.push(opts.notify_port);
   }
   if (undefined !== opts.ports) {
-    for (var i=0; i<opts.ports.length; ++i) {
+    var i;
+    for (i = 0; i < opts.ports.length; ++i) {
       this.ports.push(opts.ports[i]);
     }
   }
@@ -85,7 +86,7 @@ function Modem(opts) {
   this.autoHangup = opts.auto_hangup || false;
 
   this.commandsStack = [];
-  
+
   this.textMode = false;
   this.echoMode = false;
 
@@ -101,8 +102,7 @@ Modem.prototype.connect = function (cb) {
   "use strict";
   var i = 0;
   for (i; i < this.ports.length; ++i) {
-    var port = this.ports[i];
-    this.connectPort(port, cb);
+    this.connectPort(this.ports[i], cb);
   }
 };
 /**
@@ -143,12 +143,12 @@ Modem.prototype.connectPort = function (port, cb) {
  *   1 - data
  *  -1 - error
  */
-Modem.prototype.onPortConnected = function(port, dataMode, cb) {
+Modem.prototype.onPortConnected = function (port, dataMode, cb) {
   if (dataMode === -1) {
     ++this.portErrors;
   } else {
     ++this.portConnected;
-    this.serialPorts.push (port);
+    this.serialPorts.push(port);
 
     port.removeAllListeners('error');
     port.on('error', this.serialPortError.bind(this));
@@ -159,7 +159,7 @@ Modem.prototype.onPortConnected = function(port, dataMode, cb) {
     this.buffers.push(buf);
     this.bufferCursors.push(cursor);
 
-    port.on('data', this.onData.bind(this, buf, cursor));
+    port.on('data', this.onData.bind(this, this.buffers.length - 1));
     if (1 === dataMode) {
       this.dataPort = port;
     }
@@ -167,23 +167,29 @@ Modem.prototype.onPortConnected = function(port, dataMode, cb) {
 
   if (this.portErrors + this.portConnected === this.ports.length) {
     if (null === this.dataPort) {
-      this.emit('error', new Error('NOT CONNECTED'));
+      cb(new Error('NOT CONNECTED'));
     } else {
       this.configureModem(function () {
         cb();
-      });      
+      });
     }
   }
 };
 
-Modem.prototype.serialPortError = function(err) {
-  console.error('Serial port %s error: %s (%d)', port, err.message, err.code);
+Modem.prototype.serialPortError = function (err) {
+  console.error('Serial port error: %s (%d)', err.message, err.code);
   this.emit('error', err);
 };
 
-Modem.prototype.serialPortClosed = function(err) {
-  console.log('Port was closed!');
+Modem.prototype.serialPortClosed = function () {
   this.emit('disconnect');
+};
+
+Modem.prototype.close = function () {
+  var i = 0;
+  for (i; i < this.serialPorts.length; ++i) {
+    this.serialPorts[i].close();
+  }
 };
 
 /**
@@ -233,18 +239,21 @@ Modem.prototype.__writeToSerial = function (cmd) {
 /**
  * 
  */
-Modem.prototype.onData = function (buffer, cursor, data) {
+Modem.prototype.onData = function (bufInd, data) {
   "use strict";
+  var buffer = this.buffers[bufInd];
   if (this.debug) {
-    console.log(' <-----', data.toString());
+    console.log('%d <----', bufInd, data.toString(), this.bufferCursors[bufInd]);
   }
-  if (cursor + data.length > buffer.length) { //Buffer overflow
+  if (this.bufferCursors[bufInd] + data.length > buffer.length) { //Buffer overflow
     console.error('Data buffer overflow');
-    cursor = 0;
+    this.bufferCursors[bufInd] = 0;
   }
-  data.copy(buffer, cursor);
-  cursor += data.length;
-  var resp = buffer.slice(0, cursor - 1).toString().trim();
+  data.copy(buffer, this.bufferCursors[bufInd]);
+  this.bufferCursors[bufInd] += data.length;
+  if (buffer[this.bufferCursors[bufInd] - 1] !== 10 
+   && data.toString().indexOf('>') === -1) { return; }
+  var resp = buffer.slice(0, this.bufferCursors[bufInd]).toString().trim();
   var arr = resp.split('\r\n');
 
   if (arr.length > 0) {
@@ -261,9 +270,9 @@ Modem.prototype.onData = function (buffer, cursor, data) {
       if (arrLength > 0) {
         var b = new Buffer(arr.join('\r\n'));
         b.copy(buffer, 0);
-        cursor = b.length;
+        this.bufferCursors[bufInd] = b.length;
       } else {
-        cursor = 0;
+        this.bufferCursors[bufInd] = 0;
         return;
       }
     }
@@ -288,23 +297,24 @@ Modem.prototype.onData = function (buffer, cursor, data) {
           arr.splice(0, 1);
         }
         cmd.doCallback(resp);
-        cursor = 0;
+        this.bufferCursors[bufInd] = 0;
         this.sendNext();
       }
     } else {
-      console.log('Unhandled command: %s', resp);
+      console.log('Unhandled command: %s', resp, this.bufferCursors[bufInd]);
     }
-  } 
+  }
 };
 /**
  *
  */
-Modem.prototype.handleNotification = function(line) {
-  var handled = false;
+Modem.prototype.handleNotification = function (line) {
+  var handled = false, match, smsId;
 
   if (line.substr(0, 5) === '+CMTI') {
     match = line.match(/\+CMTI:\s*"?([A-Za-z0-9]+)"?,(\d+)/);
     if (null !== match && match.length > 2) {
+      handled = true;
       smsId = parseInt(match[2], 10);
       this.getSMS(smsId, function (err, msg) {
         if (err === undefined) {
@@ -317,10 +327,10 @@ Modem.prototype.handleNotification = function(line) {
         }
       }.bind(this));
     }
-    handled = true;
   } else if (line.substr(0, 5) === '+CDSI') {
     match = line.match(/\+CDSI:\s*"?([A-Za-z0-9]+)"?,(\d+)/);
     if (null !== match && match.length > 2) {
+      handled = true;
       smsId = parseInt(match[2], 10);
       this.getSMS(smsId, function (err, msg) {
         if (err === undefined) {
@@ -333,13 +343,12 @@ Modem.prototype.handleNotification = function(line) {
         }
       }.bind(this));
     }
-    handled = true;
   } else if (line.substr(0, 5) === '+CUSD') {
     match = line.match(/\+CUSD:\s*(\d),"?([0-9A-F]+)"?,(\d*)/);
     if (match !== null && match.length === 4) {
+      handled = true;
       this.emit('USSD', parseInt(match[1], 10), match[2], parseInt(match[3], 10));
     }
-    handled = true;
   } else if (line.substr(0, 4) === 'RING') {
     if (this.autoHangup) {
       this.sendCommand('ATH');
@@ -356,7 +365,7 @@ Modem.prototype.configureModem = function (cb) {
   this.setEchoMode(false);
   this.setTextMode(false);
   this.disableStatusNotifications();
-  this.sendCommand('AT+CNMI=2,1,0,2,0', function (data) {
+  this.sendCommand('AT+CNMI=2,1,0,2,0', function () {
     cb();
   });
 };
@@ -615,7 +624,7 @@ Modem.prototype.getIMSI = function (cb) {
       if (null !== match && match.length === 2) {
         cb(undefined, match[1]);
       } else {
-        cb(new Error('NOT SUPPORTED'));
+        cb(new Error(data));
       }
     }
   });

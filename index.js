@@ -119,7 +119,7 @@ Modem.prototype.connectPort = function (port, cb) {
     serialPort.write('AT\r\n');
     commandTimeout = setTimeout(function () {
       this.onPortConnected(serialPort, 0, cb);
-    }.bind(this), 1000);
+    }.bind(this), 5000);
   }.bind(this));
 
   serialPort.once('data', function (data) {

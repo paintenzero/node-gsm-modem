@@ -34,8 +34,11 @@ pduParser.parse = function(pdu) {
         senderSize++;
 
     obj.sender_type = parseInt(buffer[2]).toString(16)
-
-    obj.sender = pduParser.deSwapNibbles(pdu.slice(cursor, cursor+senderSize));
+    if (obj.sender_type === 'd0') {
+        obj.sender = this.decode7Bit(pdu.slice(cursor, cursor+senderSize), Math.floor(senderSize*4/7)).trim();
+    } else {
+        obj.sender = pduParser.deSwapNibbles(pdu.slice(cursor, cursor+senderSize));
+    }
     cursor += senderSize;
 
     var protocolIdentifier = pdu.slice(cursor, cursor+2);
@@ -72,14 +75,14 @@ pduParser.parse = function(pdu) {
             var currentPart = pdu.slice(cursor+12, cursor+14);
         }
 
-        if(iei == '00')
+        /*if(iei == '00')
             cursor += (udhLength-2)*4;
         else if(iei == '08')
             cursor += ((udhLength-2)*4)+2;
         else
-            cursor += (udhLength-2)*2;
+            cursor += (udhLength-2)*2;*/
+        cursor = cursor + (parseInt(udhLength, 16) + 1) * 2;
     }
-
     if(obj.encoding === '16bit')
         var text = pduParser.decode16Bit(pdu.slice(cursor), dataLength);
     else if(obj.encoding === '7bit')

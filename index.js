@@ -243,7 +243,7 @@ Modem.prototype.onData = function (bufInd, data) {
   "use strict";
   var buffer = this.buffers[bufInd];
   if (this.debug) {
-    console.log('%d <----', bufInd, data.toString(), this.bufferCursors[bufInd]);
+    console.log('%d <----', bufInd, data.toString());
   }
   if (this.bufferCursors[bufInd] + data.length > buffer.length) { //Buffer overflow
     console.error('Data buffer overflow');
@@ -430,7 +430,8 @@ Modem.prototype.getSMSCenter = function (cb) {
  */
 Modem.prototype.getAllSMS = function (cb) {
   "use strict";
-  // this.sendCommand('AT+CPMS="SM"');
+
+  this.sendCommand('AT+CPMS="MT","ME","ME"');
   this.sendCommand('AT+CMGL=' + (this.textMode ? '"ALL"' : 4), function (data) {
     if (typeof cb === 'function') {
       if (data.indexOf('OK') === -1) {
@@ -458,8 +459,9 @@ Modem.prototype.getAllSMS = function (cb) {
       }
       cb(undefined, ret);
     }
-  });
+  }.bind(this));
 };
+
 /**
  * Requests SMS by id
  * @param id int of the SMS to get

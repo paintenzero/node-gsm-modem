@@ -93,6 +93,8 @@ function Modem(opts) {
 
   this.notifyReconnectRetries = 0;
   this.ussdTimeout = opts.ussdTimeout || 15000;
+
+  this.storages = {};
 }
 util.inherits(Modem, EventEmitter);
 Modem.prototype.isGSMAlphabet = isGSMAlphabet;
@@ -173,9 +175,7 @@ Modem.prototype.onPortConnected = function (port, dataMode, cb) {
       this.close();
       cb(new Error('NOT CONNECTED'));
     } else {
-      this.configureModem(function () {
-        cb();
-      });
+      this.configureModem(cb);
     }
   }
 };
@@ -199,7 +199,7 @@ Modem.prototype.close = function (cb) {
 Modem.prototype.onClose = function (cb) {
   ++this.portCloses;
   if (this.portCloses === this.serialPorts.length) {
-    if (typeof cb === 'function' ) {
+    if (typeof cb === 'function') {
       cb();
     }
   }
@@ -264,8 +264,8 @@ Modem.prototype.onData = function (bufInd, data) {
   }
   data.copy(buffer, this.bufferCursors[bufInd]);
   this.bufferCursors[bufInd] += data.length;
-  if (buffer[this.bufferCursors[bufInd] - 1] !== 10 
-   && data.toString().indexOf('>') === -1) { return; }
+  if (buffer[this.bufferCursors[bufInd] - 1] !== 10
+      && data.toString().indexOf('>') === -1) { return; }
   var resp = buffer.slice(0, this.bufferCursors[bufInd]).toString().trim();
   var arr = resp.split('\r\n');
 
@@ -314,7 +314,7 @@ Modem.prototype.onData = function (bufInd, data) {
         this.sendNext();
       }
     } else {
-      if(this.debug) {
+      if (this.debug) {
         console.log('Unhandled command: %s', resp);
       }
       this.bufferCursors[bufInd] = 0;
@@ -325,14 +325,15 @@ Modem.prototype.onData = function (bufInd, data) {
  *
  */
 Modem.prototype.handleNotification = function (line) {
-  var handled = false, match, smsId;
+  var handled = false, match, smsId, storage;
 
   if (line.substr(0, 5) === '+CMTI') {
     match = line.match(/\+CMTI:\s*"?([A-Za-z0-9]+)"?,(\d+)/);
     if (null !== match && match.length > 2) {
       handled = true;
+      storage = match[1];
       smsId = parseInt(match[2], 10);
-      this.getSMS(smsId, function (err, msg) {
+      this.getSMS(storage, smsId, function (err, msg) {
         if (err === undefined) {
           this.deleteSMS(smsId, function (err) {
             if (err) {
@@ -347,8 +348,9 @@ Modem.prototype.handleNotification = function (line) {
     match = line.match(/\+CDSI:\s*"?([A-Za-z0-9]+)"?,(\d+)/);
     if (null !== match && match.length > 2) {
       handled = true;
+      storage = match[1];
       smsId = parseInt(match[2], 10);
-      this.getSMS(smsId, function (err, msg) {
+      this.getSMS(storage, smsId, function (err, msg) {
         if (err === undefined) {
           this.deleteSMS(smsId, function (err) {
             if (err) {
@@ -381,9 +383,27 @@ Modem.prototype.configureModem = function (cb) {
   this.setEchoMode(false);
   this.setTextMode(false);
   this.disableStatusNotifications();
-  this.sendCommand('AT+CNMI=2,1,0,2,0', function () {
-    cb();
-  });
+  this.sendCommand('AT+CNMI=2,1,0,2,0');
+
+  this.getStorages(function (err, storages) {
+    var i, supportOutboxME = false, supportInboxME = false;
+    for (i = 0; i < storages.outbox.length; ++i) {
+      if (storages.outbox[i] === '"ME"') { supportOutboxME = true; break; }
+    }
+    for (i = 0; i < storages.inbox.length; ++i) {
+      if (storages.inbox[i] === '"ME"') { supportInboxME = true; break; }
+    }
+    this.setInboxOutboxStorage(supportInboxME ? "ME" : "SM", supportOutboxME ? "ME" : "SM", function (err) {
+      if (!err) {
+        this.getCurrentMessageStorages(function (err, storages) {
+          this.storages = storages;
+          cb();
+        }.bind(this));
+      } else {
+        cb(new Error('Unable to set storages'));
+      }
+    }.bind(this));
+  }.bind(this));
 };
 /**
  * Disables ^RSSI status notifications
@@ -391,7 +411,7 @@ Modem.prototype.configureModem = function (cb) {
 Modem.prototype.disableStatusNotifications = function () {
   "use strict";
   this.sendCommand('AT^CURC?', function (data) {
-    if (data.indexOf('COMMAND NOT SUPPORT') === -1) {
+    if (data.indexOf('COMMAND NOT SUPPORT') === -1 && data.indexOf('ERROR') === -1) {
       this.sendCommand('AT^CURC=0');
     }
   }.bind(this));
@@ -442,40 +462,145 @@ Modem.prototype.getSMSCenter = function (cb) {
   });
 };
 /**
- * Receives all short messages stored in the modem
+ * Receives all short messages stored in the modem in terminal's memory
+ * Deprecated
  */
 Modem.prototype.getAllSMS = function (cb) {
   "use strict";
-
-  this.sendCommand('AT+CPMS="MT","ME","ME"');
-  this.sendCommand('AT+CMGL=' + (this.textMode ? '"ALL"' : 4), function (data) {
-    if (typeof cb === 'function') {
-      if (data.indexOf('OK') === -1) {
-        cb(new Error(data));
-        return;
+  this.getMessagesFromStorage('"ME"', cb);
+};
+/**
+ * Receives all short messages stored in the modem in given storage
+ */
+Modem.prototype.getMessagesFromStorage = function (storage, cb) {
+  "use strict";
+  this.setReadStorage(storage, function (err) {
+    if (err) {
+      if (typeof cb === 'function') {
+        cb(err);
       }
-      var ret = {};
-      var arr = data.split('\r\n');
-      var i, msgStruct, index, match;
-      for (i = 0; i < arr.length; ++i) {
-        if (!this.textMode) {
-          match = arr[i].match(/\+CMGL:\s*(\d+),(\d+),(\w*),(\d+)/);
-          if (match !== null && match.length > 4) {
-            msgStruct = Pdu.parse(arr[++i]);
-            index = match[1];
-            msgStruct.status = parseInt(match[2], 10);
-            msgStruct.alpha = match[3];
-            msgStruct.length = parseInt(match[4], 10);
-            ret[index] = msgStruct;
-          }
-        } else {
-          //TODO: handle text mode
-          console.log('Text mode is not supported right now', arr[i]);
-        }
-      }
-      cb(undefined, ret);
+      return;
     }
+    this.sendCommand('AT+CMGL=' + (this.textMode ? '"ALL"' : 4), function (data) {
+      if (typeof cb === 'function') {
+        if (data.indexOf('OK') === -1) {
+          cb(new Error(data));
+          return;
+        }
+        var ret = {};
+        var arr = data.split('\r\n');
+        var i, msgStruct, index, match;
+        for (i = 0; i < arr.length; ++i) {
+          if (!this.textMode) {
+            match = arr[i].match(/\+CMGL:\s*(\d+),(\d+),(\w*),(\d+)/);
+            if (match !== null && match.length > 4) {
+              msgStruct = Pdu.parse(arr[++i]);
+              index = match[1];
+              msgStruct.status = parseInt(match[2], 10);
+              msgStruct.alpha = match[3];
+              msgStruct.length = parseInt(match[4], 10);
+              ret[index] = msgStruct;
+            }
+          } else {
+            //TODO: handle text mode
+            console.log('Text mode is not supported right now', arr[i]);
+          }
+        }
+        cb(undefined, ret);
+      }
+    }.bind(this));
   }.bind(this));
+};
+/**
+ * Returns current message storages
+ */
+Modem.prototype.getCurrentMessageStorages = function (cb) {
+  this.sendCommand('AT+CPMS?', function (data) {
+    if (data.indexOf('OK') !== -1) {
+      var match = data.match(/\+CPMS:\s+("[A-Za-z0-9]+"),(\d+),(\d+),("[A-Za-z0-9]+"),(\d+),(\d+),("[A-Za-z0-9]+"),(\d+),(\d+)/);
+      if (match && match.length > 9) {
+        var ret = {
+          storage1: {
+            storage: match[1],
+            current: parseInt(match[2], 10),
+            max: parseInt(match[3], 10)
+          },
+          storage2: {
+            storage: match[4],
+            current: parseInt(match[5], 10),
+            max: parseInt(match[6], 10)
+          },
+          storage3: {
+            storage: match[7],
+            current: parseInt(match[8], 10),
+            max: parseInt(match[9], 10)
+          },
+        };
+        cb(undefined, ret);
+      } else {
+        cb(new Error('NOT MATCHED'));
+      }
+    } else {
+      cb(new Error(data));
+    }
+  });
+};
+
+/**
+ * Returns possible storages for inbox messages
+ */
+Modem.prototype.getStorages = function (cb) {
+  this.sendCommand('AT+CPMS=?', function (data) {
+    if (typeof cb === 'function') {
+      if (data.indexOf('OK') !== -1) {
+        var match = data.match(/\+CPMS:\s+\(([^\)]*)\),\(([^\)]*)\),\(([^\)]*)\)/);
+        if (match && match.length > 3) {
+          var ret = {
+            read: match[1].split(','),
+            outbox: match[2].split(','),
+            inbox: match[3].split(',')
+          };
+          cb(undefined, ret);
+        } else {
+          cb(new Error('PARSE ERROR'));
+        }
+      } else {
+        cb(new Error(data));
+      }
+    }
+  });
+};
+/**
+ * Sets storage for inbox messages
+ */
+Modem.prototype.setReadStorage = function (storage, cb) {
+  if (storage[0] !== '"') { storage = '"' + storage + '"'; }
+  this.sendCommand('AT+CPMS=' + storage + ',,', function (data) {
+    if (typeof cb === 'function') {
+      if (data.indexOf('OK') !== -1) {
+        cb(undefined);
+      } else {
+        cb(new Error(data));
+      }
+    }
+  });
+};
+
+/**
+ * Sets storage for inbox messages
+ */
+Modem.prototype.setInboxOutboxStorage = function (inbox, outbox, cb) {
+  if (inbox[0] !== '"') { inbox = '"' + inbox + '"'; }
+  if (outbox[0] !== '"') { outbox = '"' + outbox + '"'; }
+  this.sendCommand('AT+CPMS=' + inbox + ',' + outbox + ',' + inbox, function (data) {
+    if (typeof cb === 'function') {
+      if (data.indexOf('OK') !== -1) {
+        cb(undefined);
+      } else {
+        cb(new Error(data));
+      }
+    }
+  });
 };
 
 /**
@@ -483,24 +608,27 @@ Modem.prototype.getAllSMS = function (cb) {
  * @param id int of the SMS to get
  * @param cb function to callback. Function should receive dictionary containing the parsed pdu message
  */
-Modem.prototype.getSMS = function (id, cb) {
+Modem.prototype.getSMS = function (storage, id, cb) {
   "use strict";
-  this.sendCommand('AT+CMGR=' + id, function (data) {
-    if (-1 === data.indexOf('OK')) {
-      cb(new Error(data));
-      return;
-    }
-    var arr = data.split('\r\n');
-    var i, match, msgStruct;
-    for (i = 0; i < arr.length; ++i) {
-      match = arr[i].match(/\+CMGR:\s+(\d*),(\w*),(\d+)/);
-      if (null !== match && match.length > 3) {
-        msgStruct = Pdu.parse(arr[++i]);
-        cb(undefined, msgStruct);
-        break;
+  this.setReadStorage(storage, function (err) {
+    if (err) { cb(err); return; }
+    this.sendCommand('AT+CMGR=' + id, function (data) {
+      if (-1 === data.indexOf('OK')) {
+        cb(new Error(data));
+        return;
       }
-    }
-  });
+      var arr = data.split('\r\n');
+      var i, match, msgStruct;
+      for (i = 0; i < arr.length; ++i) {
+        match = arr[i].match(/\+CMGR:\s+(\d*),(\w*),(\d+)/);
+        if (null !== match && match.length > 3) {
+          msgStruct = Pdu.parse(arr[++i]);
+          cb(undefined, msgStruct);
+          break;
+        }
+      }
+    });
+  }.bind(this));
 };
 
 /**
@@ -548,6 +676,10 @@ function PartsSendQueue(modem, parts, cb) {
  */
 Modem.prototype.sendSMS = function (message, cb) {
   "use strict";
+  process.nextTick(function(){
+    cb(new Error('Nope'));
+  });
+  return;
   if (message.receiver === undefined || message.text === undefined) {
     cb(new Error('Either receiver or text is not specified'));
     return;
@@ -664,6 +796,21 @@ Modem.prototype.getIMEI = function (cb) {
   });
 };
 /**
+ * Returns modem's manufacturer
+ */
+Modem.prototype.getManufacturer = function (cb) {
+  "use strict";
+  this.sendCommand('AT+CGMI', function (data) {
+    if (typeof cb === 'function') {
+      if (data.indexOf('OK') === -1) {
+        cb(new Error(data));
+      } else {
+        cb(undefined, data.split('\r\n')[0]);
+      }
+    }
+  });
+};
+/**
  * Returns modem's model
  */
 Modem.prototype.getModel = function (cb) {
@@ -734,6 +881,19 @@ Modem.prototype.getSignalStrength = function (cb) {
     }
   });
 };
-
+/**
+ * Sends custom AT command
+ */
+Modem.prototype.customATCommand = function (cmd, cb) {
+  this.sendCommand(cmd, function (data) {
+    if (typeof cb === 'function') {
+      if (data.indexOf('OK') !== -1) {
+        cb(undefined, data);
+      } else {
+        cb(new Error(data));
+      }
+    }
+  });
+};
 
 module.exports = Modem;

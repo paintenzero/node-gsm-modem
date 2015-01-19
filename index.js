@@ -163,7 +163,7 @@ Modem.prototype.onPortConnected = function (port, dataMode, cb) {
     this.bufferCursors.push(cursor);
 
     port.flush(function () {
-      port.on('data', this.onData.bind(this, this.buffers.length - 1));
+      port.on('data', this.onData.bind(this, port, this.buffers.length - 1));
       if (1 === dataMode) {
         this.dataPort = port;
       }
@@ -252,7 +252,7 @@ Modem.prototype.__writeToSerial = function (cmd) {
 /**
  * 
  */
-Modem.prototype.onData = function (bufInd, data) {
+Modem.prototype.onData = function (port, bufInd, data) {
   "use strict";
   var buffer = this.buffers[bufInd];
   if (this.debug) {
@@ -291,7 +291,7 @@ Modem.prototype.onData = function (bufInd, data) {
     }
     var lastLine = (arr[arrLength - 1]).trim();
 
-    if (this.commandsStack.length > 0) {
+    if (port === this.dataPort && this.commandsStack.length > 0) {
       var cmd = this.commandsStack[0];
       var b_Finished = false;
 
@@ -387,11 +387,13 @@ Modem.prototype.configureModem = function (cb) {
 
   this.getStorages(function (err, storages) {
     var i, supportOutboxME = false, supportInboxME = false;
-    for (i = 0; i < storages.outbox.length; ++i) {
-      if (storages.outbox[i] === '"ME"') { supportOutboxME = true; break; }
-    }
-    for (i = 0; i < storages.inbox.length; ++i) {
-      if (storages.inbox[i] === '"ME"') { supportInboxME = true; break; }
+    if (!err) {
+      for (i = 0; i < storages.outbox.length; ++i) {
+        if (storages.outbox[i] === '"ME"') { supportOutboxME = true; break; }
+      }
+      for (i = 0; i < storages.inbox.length; ++i) {
+        if (storages.inbox[i] === '"ME"') { supportInboxME = true; break; }
+      }
     }
     this.setInboxOutboxStorage(supportInboxME ? "ME" : "SM", supportOutboxME ? "ME" : "SM", function (err) {
       if (!err) {
@@ -790,7 +792,7 @@ Modem.prototype.getIMEI = function (cb) {
       if (null !== match && match.length === 2) {
         cb(undefined, match[1]);
       } else {
-        cb(new Error('NOT SUPPORTED'));
+        cb(new Error('GET IMEI NOT SUPPORTED: ' + data));
       }
     }
   });
@@ -838,7 +840,7 @@ Modem.prototype.getOperator = function (text, cb) {
       if (null !== match && 4 < match.length) {
         cb(undefined, match[3]);
       } else {
-        cb(new Error('NOT SUPPORTED'));
+        cb(new Error('GET OPERATOR NOT SUPPORTED'));
       }
     }
   }.bind(this));
@@ -876,7 +878,7 @@ Modem.prototype.getSignalStrength = function (cb) {
           });
         }
       } else {
-        cb(new Error('NOT SUPPORTED'));
+        cb(new Error('GET SIGNAL NOT SUPPORTED'));
       }
     }
   });

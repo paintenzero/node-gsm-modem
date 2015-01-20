@@ -34,7 +34,7 @@ function HayesCommand(hayesCommand, callback) {
     this.timeout = setTimeout(function () {
       this.doCallback('ERROR: TIMEOUT');
       cb();
-    }.bind(this), 5000);
+    }.bind(this), 15000);
   };
 }
 /**
@@ -87,6 +87,7 @@ function Modem(opts) {
   this.portErrors = 0;
   this.portConnected = 0;
   this.portCloses = 0;
+  this.connected = false;
 
   this.serialPorts = [];
   this.buffers = [];
@@ -198,6 +199,7 @@ Modem.prototype.onPortConnected = function (port, dataMode, cb) {
       this.close();
       cb(new Error('NOT CONNECTED'));
     } else {
+      this.connected = true;
       this.configureModem(cb);
     }
   }
@@ -214,6 +216,7 @@ Modem.prototype.serialPortClosed = function () {
 
 Modem.prototype.close = function (cb) {
   var i = 0;
+  this.connected = false;
   for (i; i < this.serialPorts.length; ++i) {
     this.serialPorts[i].close(this.onClose.bind(this, cb));
   }
@@ -254,7 +257,7 @@ Modem.prototype.sendCommand = function (cmd, cb, waitFor) {
  */
 Modem.prototype.sendNext = function () {
   "use strict";
-  if (this.commandsStack.length === 0) {
+  if (this.commandsStack.length === 0 || this.connected === false) {
     return;
   }
   var cmd = this.commandsStack[0];

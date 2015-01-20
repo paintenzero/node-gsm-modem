@@ -95,6 +95,7 @@ function Modem(opts) {
   this.ussdTimeout = opts.ussdTimeout || 15000;
 
   this.storages = {};
+  this.manufacturer = 'UNKNOWN';
 }
 util.inherits(Modem, EventEmitter);
 Modem.prototype.isGSMAlphabet = isGSMAlphabet;
@@ -119,7 +120,12 @@ Modem.prototype.connectPort = function (port, cb) {
   var commandTimeout = null;
 
   serialPort.on('open', function () {
-    serialPort.write('AT\r\n');
+    serialPort.write('AT\r\n', function (err) {
+      if (err) {
+        clearTimeout(commandTimeout);
+        this.onPortConnected(serialPort, -1, cb);
+      }
+    });
     commandTimeout = setTimeout(function () {
       this.onPortConnected(serialPort, 0, cb);
     }.bind(this), 5000);
@@ -384,6 +390,11 @@ Modem.prototype.configureModem = function (cb) {
   this.setTextMode(false);
   this.disableStatusNotifications();
   this.sendCommand('AT+CNMI=2,1,0,2,0');
+  this.getManufacturer(function (err, manufacturer) {
+    if (!err) {
+      this.manufacturer = manufacturer.toUpperCase();
+    }
+  }.bind(this));
 
   this.getStorages(function (err, storages) {
     var i, supportOutboxME = false, supportInboxME = false;
@@ -729,8 +740,10 @@ Modem.prototype.deleteSMS = function (smsId, cb) {
  * Requests custom USSD
  */
 Modem.prototype.getUSSD = function (ussd, cb) {
-  var encoded = Pdu.ussdEncode(ussd);
-  this.sendCommand('AT+CUSD=1,"' + encoded + '",15', function (data) {
+  if (this.manufacturer.indexOf('ZTE') === -1) {
+    ussd = Pdu.ussdEncode(ussd);
+  }
+  this.sendCommand('AT+CUSD=1,"' + ussd + '",15', function (data) {
     if (data.indexOf('OK') !== -1) {
       var processed = false;
       var USSDHandler = function (status, data, dcs) {

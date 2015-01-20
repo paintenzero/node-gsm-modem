@@ -14,14 +14,27 @@ function HayesCommand(hayesCommand, callback) {
   this.sent = false;
   this.callback = callback;
   this.waitCommand = null; //Specifies a string to wait for. Waits for standart responses
+
+  this.timeout = null;
+
   this.toString = function () {
     return this.cmd + '\r';
   };
   this.doCallback = function (response) {
-    this.response = response;
-    if (typeof this.callback === 'function') {
-      this.callback(response);
+    clearTimeout(this.timeout);
+    if (this.response === null) {
+      this.response = response;
+      if (typeof this.callback === 'function') {
+        this.callback(response);
+      }
     }
+  };
+
+  this.startTimer = function (cb) {
+    this.timeout = setTimeout(function () {
+      this.doCallback('ERROR: TIMEOUT');
+      cb();
+    }.bind(this), 5000);
   };
 }
 /**
@@ -91,7 +104,6 @@ function Modem(opts) {
   this.textMode = false;
   this.echoMode = false;
 
-  this.notifyReconnectRetries = 0;
   this.ussdTimeout = opts.ussdTimeout || 15000;
 
   this.storages = {};
@@ -105,6 +117,8 @@ Modem.prototype.isGSMAlphabet = isGSMAlphabet;
 Modem.prototype.connect = function (cb) {
   "use strict";
   var i = 0;
+  this.portConnected = 0;
+  this.portErrors = 0;
   for (i; i < this.ports.length; ++i) {
     this.connectPort(this.ports[i], cb);
   }
@@ -120,7 +134,7 @@ Modem.prototype.connectPort = function (port, cb) {
   var commandTimeout = null;
 
   serialPort.on('open', function () {
-    serialPort.write('AT\r\n', function (err) {
+    serialPort.write('AT\r', function (err) {
       if (err) {
         clearTimeout(commandTimeout);
         this.onPortConnected(serialPort, -1, cb);
@@ -132,6 +146,9 @@ Modem.prototype.connectPort = function (port, cb) {
   }.bind(this));
 
   serialPort.once('data', function (data) {
+    if (this.debug) {
+      console.log('Inroduction data: ', data.toString());
+    }
     if (data.toString().indexOf('OK') !== -1) {
       clearTimeout(commandTimeout);
       this.onPortConnected(serialPort, 1, cb);
@@ -201,11 +218,18 @@ Modem.prototype.close = function (cb) {
     this.serialPorts[i].close(this.onClose.bind(this, cb));
   }
 };
-
+/**
+ * Is called when the port is closed
+ */
 Modem.prototype.onClose = function (cb) {
   ++this.portCloses;
   if (this.portCloses === this.serialPorts.length) {
     if (typeof cb === 'function') {
+      this.serialPorts = [];
+      this.buffers = [];
+      this.bufferCursors = [];
+      this.dataPort = null;
+      this.commandsStack = [];
       cb();
     }
   }
@@ -235,6 +259,14 @@ Modem.prototype.sendNext = function () {
   }
   var cmd = this.commandsStack[0];
   if (cmd && !cmd.sent) {
+    cmd.startTimer(function () {
+      if (this.debug) {
+        console.log('command %s timedout', cmd.cmd);
+      }
+      this.emit('error', new Error('TIMEOUT'));
+      this.commandsStack.splice(0, 1);
+      this.sendNext();
+    }.bind(this));
     this.__writeToSerial(cmd);
   }
 };
@@ -276,7 +308,6 @@ Modem.prototype.onData = function (port, bufInd, data) {
   var arr = resp.split('\r\n');
 
   if (arr.length > 0) {
-    //TODO: handle notification lines here
     var i, arrLength = arr.length, hadNotification = false;
     for (i = arrLength - 1; i >= 0; --i) {
       if (this.handleNotification(arr[i])) {
@@ -516,7 +547,7 @@ Modem.prototype.getMessagesFromStorage = function (storage, cb) {
             }
           } else {
             //TODO: handle text mode
-            console.log('Text mode is not supported right now', arr[i]);
+            console.error('Text mode is not supported right now', arr[i]);
           }
         }
         cb(undefined, ret);

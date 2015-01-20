@@ -678,10 +678,6 @@ function PartsSendQueue(modem, parts, cb) {
  */
 Modem.prototype.sendSMS = function (message, cb) {
   "use strict";
-  process.nextTick(function(){
-    cb(new Error('Nope'));
-  });
-  return;
   if (message.receiver === undefined || message.text === undefined) {
     cb(new Error('Either receiver or text is not specified'));
     return;

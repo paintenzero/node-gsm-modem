@@ -109,6 +109,7 @@ function Modem(opts) {
 
   this.storages = {};
   this.manufacturer = 'UNKNOWN';
+
 }
 util.inherits(Modem, EventEmitter);
 Modem.prototype.isGSMAlphabet = isGSMAlphabet;
@@ -362,7 +363,7 @@ Modem.prototype.onData = function (port, bufInd, data) {
   }
 };
 /**
- *
+ * handles notification of rings, messages and USSD
  */
 Modem.prototype.handleNotification = function (line) {
   var handled = false, match, smsId, storage;
@@ -592,7 +593,28 @@ Modem.prototype.getCurrentMessageStorages = function (cb) {
     }
   });
 };
-
+/**
+ * Returns boolean whether modem supports given storage
+ */
+Modem.prototype.supportsStorage = function (storage, cb) {
+  if (storage[0] !== '"') { storage = '"' + storage + '"'; }
+  this.getStorages(function (err, storages) {
+    if (typeof cb === 'function') {
+      if (!err) {
+        var i;
+        for (i = 0; i < storages.read.length; ++i) {
+          if (storages.read[i] === storage) {
+            cb(undefined, true);
+            return;
+          }
+        }
+        cb(undefined, false);
+      } else {
+        cb(err);
+      }
+    }
+  });
+};
 /**
  * Returns possible storages for inbox messages
  */
@@ -657,25 +679,35 @@ Modem.prototype.setInboxOutboxStorage = function (inbox, outbox, cb) {
  */
 Modem.prototype.getSMS = function (storage, id, cb) {
   "use strict";
-  this.setReadStorage(storage, function (err) {
-    if (err) { cb(err); return; }
+  var readMessage = function () {
     this.sendCommand('AT+CMGR=' + id, function (data) {
-      if (-1 === data.indexOf('OK')) {
-        cb(new Error(data));
-        return;
-      }
-      var arr = data.split('\r\n');
-      var i, match, msgStruct;
-      for (i = 0; i < arr.length; ++i) {
-        match = arr[i].match(/\+CMGR:\s+(\d*),(\w*),(\d+)/);
-        if (null !== match && match.length > 3) {
-          msgStruct = Pdu.parse(arr[++i]);
-          cb(undefined, msgStruct);
-          break;
+      if (typeof cb === 'function') {
+        if (-1 === data.indexOf('OK')) {
+          cb(new Error(data));
+          return;
+        }
+        var arr = data.split('\r\n');
+        var i, match, msgStruct;
+        for (i = 0; i < arr.length; ++i) {
+          match = arr[i].match(/\+CMGR:\s+(\d*),(\w*),(\d+)/);
+          if (null !== match && match.length > 3) {
+            msgStruct = Pdu.parse(arr[++i]);
+            cb(undefined, msgStruct);
+            break;
+          }
         }
       }
     });
-  }.bind(this));
+  }.bind(this);
+
+  if (storage !== null) {
+    this.setReadStorage(storage, function (err) {
+      if (err) { if (typeof cb === 'function') { cb(err); } return; }
+      readMessage();
+    }.bind(this));
+  } else {
+    readMessage();
+  }
 };
 
 /**
@@ -768,6 +800,46 @@ Modem.prototype.deleteSMS = function (smsId, cb) {
       }
     }
   });
+};
+/**
+ * Reads ZTE status reports
+ */
+Modem.prototype.readDeleteZTE_SR = function(cb) {
+  //I don't know how to do better way.........
+  var messagesCount = 0, messages = [], got = 0, current = 0;
+
+  var handleSMS = function (err, msgStruct) {
+    if (!err) {
+      messages.push(msgStruct);
+    }
+    ++got;
+    this.deleteSMS(current, function (err) {
+      if (got === messagesCount) {
+        if (typeof cb === 'function') {
+          process.nextTick(function () {
+            cb(undefined, messages);
+          });
+        }
+      } else {
+        ++current;
+        this.getSMS(null, current, handleSMS);
+      }
+    }.bind(this));
+  }.bind(this);
+
+  this.setReadStorage('SR', function (err) {
+    if (err) {
+      if (typeof cb === 'function') { cb(err); }
+    } else {
+      this.getCurrentMessageStorages(function (err, storages) {
+        if(err) { if (typeof cb === 'function') { cb(err); } }
+        else {
+          messagesCount = storages.storage1.max;
+          this.getSMS(null, current, handleSMS);
+        }
+      }.bind(this));
+    }
+  }.bind(this));
 };
 
 /**

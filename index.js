@@ -50,8 +50,7 @@ function isGSMAlphabet(text) {
 /**
  * Constructor for the modem
  * Possible options:
- *  port
- *  notify_port
+ *  ports
  *  debug
  *  auto_hangup
  *
@@ -176,23 +175,29 @@ Modem.prototype.onPortConnected = function (port, dataMode, cb) {
     ++this.portErrors;
   } else {
     ++this.portConnected;
-    this.serialPorts.push(port);
+    if (dataMode === 1 && this.dataPort !== null) { //data port is already found
+      console.log('!!!!!!!');
+      port.close();
+    } else {
+      this.serialPorts.push(port);
 
-    port.removeAllListeners('error');
-    port.on('error', this.serialPortError.bind(this));
-    port.on('close', this.serialPortClosed.bind(this));
+      port.removeAllListeners('error');
+      port.removeAllListeners('data');
+      port.on('error', this.serialPortError.bind(this));
+      port.on('close', this.serialPortClosed.bind(this));
 
-    var buf = new Buffer(1024);
-    var cursor = 0;
-    this.buffers.push(buf);
-    this.bufferCursors.push(cursor);
+      var buf = new Buffer(1024);
+      var cursor = 0;
+      this.buffers.push(buf);
+      this.bufferCursors.push(cursor);
 
-    port.flush(function () {
-      port.on('data', this.onData.bind(this, port, this.buffers.length - 1));
-      if (1 === dataMode) {
-        this.dataPort = port;
-      }
-    }.bind(this));
+      port.flush(function () {
+        port.on('data', this.onData.bind(this, port, this.buffers.length - 1));
+        if (1 === dataMode) {
+          this.dataPort = port;
+        }
+      }.bind(this));
+    }
   }
 
   if (this.portErrors + this.portConnected === this.ports.length) {
@@ -804,7 +809,7 @@ Modem.prototype.deleteSMS = function (smsId, cb) {
 /**
  * Reads ZTE status reports
  */
-Modem.prototype.readDeleteZTE_SR = function(cb) {
+Modem.prototype.readDeleteZTE_SR = function (cb) {
   //I don't know how to do better way.........
   var messagesCount = 0, messages = [], got = 0, current = 0;
 
@@ -832,8 +837,9 @@ Modem.prototype.readDeleteZTE_SR = function(cb) {
       if (typeof cb === 'function') { cb(err); }
     } else {
       this.getCurrentMessageStorages(function (err, storages) {
-        if(err) { if (typeof cb === 'function') { cb(err); } }
-        else {
+        if (err) {
+          if (typeof cb === 'function') { cb(err); }
+        } else {
           messagesCount = storages.storage1.max;
           this.getSMS(null, current, handleSMS);
         }

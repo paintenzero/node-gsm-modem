@@ -3,6 +3,7 @@ var Parsers = require('serialport').parsers;
 var Pdu = require('./pdu');
 var EventEmitter = require('events').EventEmitter;
 var util = require('util');
+var intel = require('intel');
 
 /**
  * Hayes command structure
@@ -95,9 +96,6 @@ function Modem(opts) {
   this.bufferCursors = [];
   this.dataPort = null;
 
-  if (undefined !== opts.debug) {
-    this.debug = opts.debug;
-  }
   // Auto hang up calls
   this.autoHangup = opts.auto_hangup || false;
 
@@ -111,6 +109,20 @@ function Modem(opts) {
 
   this.storages = {};
   this.manufacturer = 'UNKNOWN';
+
+  this.uniqId = Math.floor(Math.random() * 100000);
+
+  if (opts.debug) {
+    this.logger = intel.getLogger();
+  } else {
+    this.logger = intel.getLogger();
+  }
+
+  this.logger.basicConfig({
+    format: '[%(date)s] %(levelname)s Modem ' + this.uniqId + ': %(message)s',
+    level: opts.debug ? intel.DEBUG : intel.ERROR
+  });
+  this.logger.debug('Modem created with uniqId: %d', this.uniqId);
 
 }
 util.inherits(Modem, EventEmitter);
@@ -150,9 +162,7 @@ Modem.prototype.connectPort = function (port, cb) {
   }.bind(this));
 
   serialPort.once('data', function (data) {
-    if (this.debug) {
-      console.log('Inroduction data: ', data.toString());
-    }
+    this.logger.debug('Inroduction data: %s', data.toString().trim());
     if (data.toString().indexOf('OK') !== -1) {
       clearTimeout(commandTimeout);
       this.onPortConnected(serialPort, 1, cb);
@@ -160,7 +170,7 @@ Modem.prototype.connectPort = function (port, cb) {
   }.bind(this));
 
   serialPort.on('error', function (err) {
-    console.error('Port connect error: %s', err.message);
+    this.logger.error('Port connect error: %s', err.message);
     if (null !== commandTimeout) {
       clearTimeout(commandTimeout);
     }
@@ -174,11 +184,12 @@ Modem.prototype.connectPort = function (port, cb) {
  *  -1 - error
  */
 Modem.prototype.onPortConnected = function (port, dataMode, cb) {
+  this.logger.debug('port %s datamode: %d', port.path, dataMode);
   if (dataMode === -1) {
     ++this.portErrors;
   } else {
     ++this.portConnected;
-    if (dataMode === 1 && this.dataPort !== null) { //data port is already found
+    if ((dataMode === 1 && this.dataPort !== null) || (dataMode === 0 && this.manufacturer.indexOf('ZTE') !== -1)) { //data port is already found
       port.close();
     } else {
       this.serialPorts.push(port);
@@ -204,9 +215,11 @@ Modem.prototype.onPortConnected = function (port, dataMode, cb) {
 
   if (this.portErrors + this.portConnected === this.ports.length) {
     if (null === this.dataPort) {
+      this.logger.error('No data port found');
       this.close();
       cb(new Error('NOT CONNECTED'));
     } else {
+      this.logger.debug('Connected, start configuring');
       this.connected = true;
       this.configureModem(cb);
     }
@@ -214,7 +227,7 @@ Modem.prototype.onPortConnected = function (port, dataMode, cb) {
 };
 
 Modem.prototype.serialPortError = function (err) {
-  console.error('Serial port error: %s (%d)', err.message, err.code);
+  this.logger.error('Serial port error: %s (%d)', err.message, err.code);
   this.emit('error', err);
 };
 
@@ -271,9 +284,7 @@ Modem.prototype.sendNext = function () {
   var cmd = this.commandsStack[0];
   if (cmd && !cmd.sent) {
     cmd.startTimer(this.commandsTimeout, function () {
-      if (this.debug) {
-        console.log('command %s timedout', cmd.cmd);
-      }
+      this.logger.debug('command %s timedout', cmd.cmd);
       this.emit('error', new Error('TIMEOUT'));
       this.commandsStack.splice(0, 1);
       this.sendNext();
@@ -288,12 +299,10 @@ Modem.prototype.__writeToSerial = function (cmd) {
   "use strict";
   cmd.sent = true;
   this.willReceiveEcho = true;
-  if (this.debug) {
-    console.log(' ----->', cmd.toString());
-  }
+  this.logger.debug(' ----->', cmd.toString());
   this.dataPort.write(cmd.toString(), function (err) {
     if (err) {
-      console.error('Error sending command:', cmd.toString(), 'error:', err);
+      this.logger.error('Error sending command:', cmd.toString(), 'error:', err);
       this.sendNext();
     }
   }.bind(this));
@@ -304,11 +313,9 @@ Modem.prototype.__writeToSerial = function (cmd) {
 Modem.prototype.onData = function (port, bufInd, data) {
   "use strict";
   var buffer = this.buffers[bufInd];
-  if (this.debug) {
-    console.log('%d <----', bufInd, data.toString());
-  }
+  this.logger.debug('%d <----', bufInd, data.toString());
   if (this.bufferCursors[bufInd] + data.length > buffer.length) { //Buffer overflow
-    console.error('Data buffer overflow');
+    this.logger.error('Data buffer overflow');
     this.bufferCursors[bufInd] = 0;
   }
   data.copy(buffer, this.bufferCursors[bufInd]);
@@ -340,6 +347,9 @@ Modem.prototype.onData = function (port, bufInd, data) {
     var lastLine = (arr[arrLength - 1]).trim();
 
     if (port === this.dataPort && this.commandsStack.length > 0) {
+      if (this.commandsStack[0].cmd.indexOf('CUSD') !== -1) {
+        return;
+      }
       var cmd = this.commandsStack[0];
       var b_Finished = false;
 
@@ -362,9 +372,7 @@ Modem.prototype.onData = function (port, bufInd, data) {
         this.sendNext();
       }
     } else {
-      if (this.debug) {
-        console.log('Unhandled command: %s', resp);
-      }
+      this.logger.debug('Unhandled command: %s', resp);
       this.bufferCursors[bufInd] = 0;
     }
   }
@@ -385,7 +393,7 @@ Modem.prototype.handleNotification = function (line) {
         if (err === undefined) {
           this.deleteSMS(smsId, function (err) {
             if (err) {
-              console.error('Unable to delete incoming message!!', err.message);
+              this.logger.error('Unable to delete incoming message!!', err.message);
             }
           });
           this.emit('message', msg);
@@ -402,7 +410,7 @@ Modem.prototype.handleNotification = function (line) {
         if (err === undefined) {
           this.deleteSMS(smsId, function (err) {
             if (err) {
-              console.error('Unable to delete incoming report!!', err.message);
+              this.logger.error('Unable to delete incoming report!!', err.message);
             }
           });
           this.emit('report', msg);
@@ -558,7 +566,7 @@ Modem.prototype.getMessagesFromStorage = function (storage, cb) {
             }
           } else {
             //TODO: handle text mode
-            console.error('Text mode is not supported right now', arr[i]);
+            this.logger.error('Text mode is not supported right now', arr[i]);
           }
         }
         cb(undefined, ret);

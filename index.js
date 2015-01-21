@@ -347,9 +347,6 @@ Modem.prototype.onData = function (port, bufInd, data) {
     var lastLine = (arr[arrLength - 1]).trim();
 
     if (port === this.dataPort && this.commandsStack.length > 0) {
-      if (this.commandsStack[0].cmd.indexOf('CUSD') !== -1) {
-        return;
-      }
       var cmd = this.commandsStack[0];
       var b_Finished = false;
 

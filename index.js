@@ -30,11 +30,11 @@ function HayesCommand(hayesCommand, callback) {
     }
   };
 
-  this.startTimer = function (cb) {
+  this.startTimer = function (time, cb) {
     this.timeout = setTimeout(function () {
       this.doCallback('ERROR: TIMEOUT');
       cb();
-    }.bind(this), 15000);
+    }.bind(this), time);
   };
 }
 /**
@@ -53,6 +53,8 @@ function isGSMAlphabet(text) {
  *  ports
  *  debug
  *  auto_hangup
+ *  ussdTimeout
+ *  commandsTimeout
  *
  * Extends EventEmitter. Events:
  *  message - new SMS has arrived
@@ -105,6 +107,7 @@ function Modem(opts) {
   this.echoMode = false;
 
   this.ussdTimeout = opts.ussdTimeout || 15000;
+  this.commandsTimeout = opts.commandsTimeout || 15000;
 
   this.storages = {};
   this.manufacturer = 'UNKNOWN';
@@ -176,7 +179,6 @@ Modem.prototype.onPortConnected = function (port, dataMode, cb) {
   } else {
     ++this.portConnected;
     if (dataMode === 1 && this.dataPort !== null) { //data port is already found
-      console.log('!!!!!!!');
       port.close();
     } else {
       this.serialPorts.push(port);
@@ -268,7 +270,7 @@ Modem.prototype.sendNext = function () {
   }
   var cmd = this.commandsStack[0];
   if (cmd && !cmd.sent) {
-    cmd.startTimer(function () {
+    cmd.startTimer(this.commandsTimeout, function () {
       if (this.debug) {
         console.log('command %s timedout', cmd.cmd);
       }

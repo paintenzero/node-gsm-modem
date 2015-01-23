@@ -233,6 +233,7 @@ Modem.prototype.serialPortError = function (err) {
 
 Modem.prototype.serialPortClosed = function () {
   if (this.connected) {
+    ++this.portCloses;
     this.logger.debug('Serial port closed. Emit disconnect');
     this.emit('disconnect');
   }
@@ -252,8 +253,8 @@ Modem.prototype.close = function (cb) {
  * Is called when the port is closed
  */
 Modem.prototype.onClose = function (cb) {
-  this.logger.debug('Port was closed (%d / %d)', this.portCloses, this.serialPorts.length);
   ++this.portCloses;
+  this.logger.debug('Port was closed (%d / %d)', this.portCloses, this.serialPorts.length);
   if (this.portCloses === this.serialPorts.length) {
     this.logger.debug('All ports were closed');
     this.resetVars();

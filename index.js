@@ -86,29 +86,12 @@ function Modem(opts) {
     console.error('ports are undefined');
     return null;
   }
-  this.portErrors = 0;
-  this.portConnected = 0;
-  this.portCloses = 0;
-  this.connected = false;
-
-  this.serialPorts = [];
-  this.buffers = [];
-  this.bufferCursors = [];
-  this.dataPort = null;
 
   // Auto hang up calls
   this.autoHangup = opts.auto_hangup || false;
 
-  this.commandsStack = [];
-
-  this.textMode = false;
-  this.echoMode = false;
-
   this.ussdTimeout = opts.ussdTimeout || 15000;
   this.commandsTimeout = opts.commandsTimeout || 15000;
-
-  this.storages = {};
-  this.manufacturer = 'UNKNOWN';
 
   this.uniqId = Math.floor(Math.random() * 100000);
 
@@ -123,10 +106,31 @@ function Modem(opts) {
     level: opts.debug ? intel.DEBUG : intel.ERROR
   });
   this.logger.debug('Modem created with uniqId: %d', this.uniqId);
-
+  this.resetVars();
 }
 util.inherits(Modem, EventEmitter);
 Modem.prototype.isGSMAlphabet = isGSMAlphabet;
+
+/**
+ *
+ */
+Modem.prototype.resetVars = function () {
+  this.portErrors = 0;
+  this.portConnected = 0;
+  this.portCloses = 0;
+  this.connected = false;
+
+  this.serialPorts = [];
+  this.buffers = [];
+  this.bufferCursors = [];
+  this.dataPort = null;
+
+  this.textMode = false;
+  this.echoMode = false;
+  this.commandsStack = [];
+  this.storages = {};
+  this.manufacturer = 'UNKNOWN';
+};
 /**
  * Connects to modem's serial port
  */
@@ -189,28 +193,24 @@ Modem.prototype.onPortConnected = function (port, dataMode, cb) {
     ++this.portErrors;
   } else {
     ++this.portConnected;
-    if ((dataMode === 1 && this.dataPort !== null) || (dataMode === 0 && this.manufacturer.indexOf('ZTE') !== -1)) { //data port is already found
-      port.close();
-    } else {
-      this.serialPorts.push(port);
+    this.serialPorts.push(port);
 
-      port.removeAllListeners('error');
-      port.removeAllListeners('data');
-      port.on('error', this.serialPortError.bind(this));
-      port.on('close', this.serialPortClosed.bind(this));
+    port.removeAllListeners('error');
+    port.removeAllListeners('data');
+    port.on('error', this.serialPortError.bind(this));
+    port.on('close', this.serialPortClosed.bind(this));
 
-      var buf = new Buffer(1024);
-      var cursor = 0;
-      this.buffers.push(buf);
-      this.bufferCursors.push(cursor);
+    var buf = new Buffer(1024);
+    var cursor = 0;
+    this.buffers.push(buf);
+    this.bufferCursors.push(cursor);
 
-      port.flush(function () {
-        port.on('data', this.onData.bind(this, port, this.buffers.length - 1));
-        if (1 === dataMode) {
-          this.dataPort = port;
-        }
-      }.bind(this));
-    }
+    port.flush(function () {
+      port.on('data', this.onData.bind(this, port, this.buffers.length - 1));
+      if (1 === dataMode) {
+        this.dataPort = port;
+      }
+    }.bind(this));
   }
 
   if (this.portErrors + this.portConnected === this.ports.length) {
@@ -219,7 +219,7 @@ Modem.prototype.onPortConnected = function (port, dataMode, cb) {
       this.close();
       cb(new Error('NOT CONNECTED'));
     } else {
-      this.logger.debug('Connected, start configuring');
+      this.logger.debug('Connected, start configuring. Ports: ', this.serialPorts.length);
       this.connected = true;
       this.configureModem(cb);
     }
@@ -234,9 +234,12 @@ Modem.prototype.serialPortError = function (err) {
 Modem.prototype.serialPortClosed = function () {
   this.emit('disconnect');
 };
-
+/**
+ * Closes connection to ports
+ */
 Modem.prototype.close = function (cb) {
   var i = 0;
+  this.logger.debug('Modem disconnect called');
   this.connected = false;
   for (i; i < this.serialPorts.length; ++i) {
     this.serialPorts[i].close(this.onClose.bind(this, cb));
@@ -246,14 +249,13 @@ Modem.prototype.close = function (cb) {
  * Is called when the port is closed
  */
 Modem.prototype.onClose = function (cb) {
+  this.logger.debug('Port was closed (%d / %d)', this.portCloses, this.serialPorts.length);
   ++this.portCloses;
   if (this.portCloses === this.serialPorts.length) {
+    this.logger.debug('All ports were closed');
+    this.resetVars();
+    this.logger.debug('... and variables cleared');
     if (typeof cb === 'function') {
-      this.serialPorts = [];
-      this.buffers = [];
-      this.bufferCursors = [];
-      this.dataPort = null;
-      this.commandsStack = [];
       cb();
     }
   }
@@ -264,6 +266,14 @@ Modem.prototype.onClose = function (cb) {
  */
 Modem.prototype.sendCommand = function (cmd, cb, waitFor) {
   "use strict";
+  this.logger.debug('Schedule command: %s', cmd);
+  if (!this.connected) {
+    this.logger.debug('Error scheduling command %s. We are not connected', cmd);
+    if (typeof cb === 'function') {
+      process.nextTick(cb.bind(null, 'ERROR: NOT CONNECTED'));
+    }
+    return;
+  }
   var scmd = new HayesCommand(cmd, cb);
   if (waitFor !== undefined) {
     scmd.waitCommand = waitFor;
@@ -313,7 +323,7 @@ Modem.prototype.__writeToSerial = function (cmd) {
 Modem.prototype.onData = function (port, bufInd, data) {
   "use strict";
   var buffer = this.buffers[bufInd];
-  this.logger.debug('%d <----', bufInd, data.toString());
+  this.logger.debug('%s <----', port.path, data.toString());
   if (this.bufferCursors[bufInd] + data.length > buffer.length) { //Buffer overflow
     this.logger.error('Data buffer overflow');
     this.bufferCursors[bufInd] = 0;

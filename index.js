@@ -268,10 +268,10 @@ Modem.prototype.sendCommand = function (cmd, cb, waitFor) {
   "use strict";
   this.logger.debug('Schedule command: %s', cmd);
   if (!this.connected) {
-    this.logger.debug('Error scheduling command %s. We are not connected', cmd);
-    if (typeof cb === 'function') {
-      process.nextTick(cb.bind(null, 'ERROR: NOT CONNECTED'));
-    }
+    this.logger.debug('Not connected!', cmd);
+    process.nextTick(function () {
+      cb('ERROR: NOT CONNECTED');
+    });
     return;
   }
   var scmd = new HayesCommand(cmd, cb);
@@ -318,7 +318,7 @@ Modem.prototype.__writeToSerial = function (cmd) {
   }.bind(this));
 };
 /**
- * 
+ *
  */
 Modem.prototype.onData = function (port, bufInd, data) {
   "use strict";
@@ -330,8 +330,7 @@ Modem.prototype.onData = function (port, bufInd, data) {
   }
   data.copy(buffer, this.bufferCursors[bufInd]);
   this.bufferCursors[bufInd] += data.length;
-  if (buffer[this.bufferCursors[bufInd] - 1] !== 10
-      && data.toString().indexOf('>') === -1) { return; }
+  if (buffer[this.bufferCursors[bufInd] - 1] !== 10 && data.toString().indexOf('>') === -1) { return; }
   var resp = buffer.slice(0, this.bufferCursors[bufInd]).toString().trim();
   var arr = resp.split('\r\n');
 
@@ -388,6 +387,7 @@ Modem.prototype.onData = function (port, bufInd, data) {
  * handles notification of rings, messages and USSD
  */
 Modem.prototype.handleNotification = function (line) {
+  "use strict";
   var handled = false, match, smsId, storage;
 
   if (line.substr(0, 5) === '+CMTI') {
@@ -419,7 +419,7 @@ Modem.prototype.handleNotification = function (line) {
             if (err) {
               this.logger.error('Unable to delete incoming report!!', err.message);
             }
-          });
+          }.bind(this));
           this.emit('report', msg);
         }
       }.bind(this));

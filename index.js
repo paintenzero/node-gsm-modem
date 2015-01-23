@@ -232,7 +232,10 @@ Modem.prototype.serialPortError = function (err) {
 };
 
 Modem.prototype.serialPortClosed = function () {
-  this.emit('disconnect');
+  if (this.connected) {
+    this.logger.debug('Serial port closed. Emit disconnect');
+    this.emit('disconnect');
+  }
 };
 /**
  * Closes connection to ports
@@ -266,12 +269,14 @@ Modem.prototype.onClose = function (cb) {
  */
 Modem.prototype.sendCommand = function (cmd, cb, waitFor) {
   "use strict";
-  this.logger.debug('Schedule command: %s', cmd);
+  this.logger.debug('Send command: %s', cmd);
   if (!this.connected) {
     this.logger.debug('Not connected!', cmd);
-    process.nextTick(function () {
-      cb('ERROR: NOT CONNECTED');
-    });
+    if (typeof cb === 'function') {
+      process.nextTick(function () {
+        cb('ERROR: NOT CONNECTED');
+      });
+    }
     return;
   }
   var scmd = new HayesCommand(cmd, cb);

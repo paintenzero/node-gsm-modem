@@ -3,7 +3,7 @@
 var pduParser = {};
 
 var sevenBitDefault = new Array('@', '£', '$', '¥', 'è', 'é', 'ù', 'ì', 'ò', 'Ç', '\n', 'Ø', 'ø', '\r','Å', 'å','\u0394', '_', '\u03a6', '\u0393', '\u039b', '\u03a9', '\u03a0','\u03a8', '\u03a3', '\u0398', '\u039e','\x1b', 'Æ', 'æ', 'ß', 'É', ' ', '!', '"', '#', '¤', '%', '&', '\'', '(', ')','*', '+', ',', '-', '.', '/', '0', '1', '2', '3', '4', '5', '6', '7','8', '9', ':', ';', '<', '=', '>', '?', '¡', 'A', 'B', 'C', 'D', 'E','F', 'G', 'H', 'I', 'J', 'K', 'L', 'M', 'N', 'O', 'P', 'Q', 'R', 'S','T', 'U', 'V', 'W', 'X', 'Y', 'Z', 'Ä', 'Ö', 'Ñ', 'Ü', '§', '¿', 'a','b', 'c', 'd', 'e', 'f', 'g', 'h', 'i', 'j', 'k', 'l', 'm', 'n', 'o','p', 'q', 'r', 's', 't', 'u', 'v', 'w', 'x', 'y', 'z', 'ä', 'ö', 'ñ','ü', 'à');
-var sevenBitEsc = new Array('', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '^', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '{', '}', '', '', '', '', '', '\\', '', '', '', '', '', '', '', '', '', '', '', '', '[', '~', ']', 
+var sevenBitEsc = new Array('', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '^', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '{', '}', '', '', '', '', '', '\\', '', '', '', '', '', '', '', '', '', '', '', '', '[', '~', ']',
     '', '|', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '€', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '');
 
 //http://en.wikipedia.org/wiki/GSM_03.40
@@ -33,7 +33,7 @@ pduParser.parse = function(pdu) {
     if(senderSize % 2 === 1)
         senderSize++;
 
-    obj.sender_type = parseInt(buffer[2]).toString(16)
+    obj.sender_type = parseInt(buffer[2]).toString(16);
     if (obj.sender_type === 'd0') {
         obj.sender = this.decode7Bit(pdu.slice(cursor, cursor+senderSize), Math.floor(senderSize*4/7)).trim();
     } else {
@@ -61,18 +61,19 @@ pduParser.parse = function(pdu) {
     if(udhi) { //User-Data-Header-Indicator: means there's some User-Data-Header.
         var udhLength = pdu.slice(cursor, cursor+2);
         var iei = pdu.slice(cursor+2, cursor+4);
+        var headerLength, referenceNumber, parts, currentPart;
         if(iei == "00") { //Concatenated sms.
-            var headerLength = pdu.slice(cursor+4, cursor+6);
-            var referenceNumber = pdu.slice(cursor+6, cursor+8);
-            var parts = pdu.slice(cursor+8, cursor+10);
-            var currentPart = pdu.slice(cursor+10, cursor+12);
+            headerLength = pdu.slice(cursor+4, cursor+6);
+            referenceNumber = pdu.slice(cursor+6, cursor+8);
+            parts = pdu.slice(cursor+8, cursor+10);
+            currentPart = pdu.slice(cursor+10, cursor+12);
         }
 
         if(iei == "08") { //Concatenaded sms with a two-bytes reference number
-            var headerLength = pdu.slice(cursor+4, cursor+6);
-            var referenceNumber = pdu.slice(cursor+6, cursor+10);
-            var parts = pdu.slice(cursor+10, cursor+12);
-            var currentPart = pdu.slice(cursor+12, cursor+14);
+            headerLength = pdu.slice(cursor+4, cursor+6);
+            referenceNumber = pdu.slice(cursor+6, cursor+10);
+            parts = pdu.slice(cursor+10, cursor+12);
+            currentPart = pdu.slice(cursor+12, cursor+14);
         }
 
         /*if(iei == '00')
@@ -198,7 +199,7 @@ pduParser.decode7Bit = function(code, length, unPadding) {
             ascii += sevenBitEsc[codeNum];
         else
             ascii += sevenBitDefault[codeNum];
-        esc = false;        
+        esc = false;
     }
     return ascii;
 }
@@ -281,7 +282,7 @@ pduParser.messageToNumberArray = function(message) //sp
 pduParser.generate = function(message) {
     var smsc = '';
     var smscPartLength = 0;
-    
+
 	if (message.smsc!==undefined){
         if (message.smsc_type!==undefined && (message.smsc_type==0x81 || message.smsc_type==0x91)){
             smsc += message.smsc_type.toString (16);
@@ -326,7 +327,7 @@ pduParser.generate = function(message) {
     pdu += '00'; //Reference Number;
     var receiverSize = ('00'+(parseInt(message.receiver.length, 10).toString(16))).slice(-2);
     var receiver = pduParser.swapNibbles(message.receiver);
-    
+
 	//Destination MSISDN type
     var receiverType;
     if (message.receiver_type !== undefined && (message.receiver_type === 0x81 || message.receiver_type === 0x91)){
@@ -530,4 +531,3 @@ pduParser.ussdEncode = function (ussd) {
 };
 
 module.exports = pduParser;
-

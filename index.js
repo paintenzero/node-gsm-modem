@@ -154,7 +154,7 @@ Modem.prototype.connectPort = function (port, cb) {
         clearTimeout(commandTimeout);
         this.onPortConnected(serialPort, -1, cb);
       }
-    });
+    }.bind(this));
     commandTimeout = setTimeout(function () {
       this.onPortConnected(serialPort, 0, cb);
     }.bind(this), 5000);
@@ -465,6 +465,7 @@ Modem.prototype.configureModem = function (cb) {
   this.getManufacturer(function (err, manufacturer) {
     if (!err) {
       this.manufacturer = manufacturer.toUpperCase().trim();
+      if (this.manufacturer === 'OK') this.manufacturer = 'HUAWEI';
     }
   }.bind(this));
 

@@ -93,10 +93,9 @@ function Modem(opts) {
   this.ussdTimeout = opts.ussdTimeout || 15000;
   this.commandsTimeout = opts.commandsTimeout || 15000;
 
+  this.logger = intel.getLogger();
   if (opts.debug) {
-    this.logger = intel.getLogger();
-  } else {
-    this.logger = intel.getLogger();
+      this.logger.setLevel(intel.DEBUG);
   }
 
   this.logger.basicConfig({
@@ -149,7 +148,6 @@ Modem.prototype.connectPort = function (port, cb) {
   });
 
   var commandTimeout = null;
-
   serialPort.on('open', function () {
     serialPort.write('AT\r', function (err) {
       if (err) {

@@ -93,8 +93,6 @@ function Modem(opts) {
   this.ussdTimeout = opts.ussdTimeout || 15000;
   this.commandsTimeout = opts.commandsTimeout || 15000;
 
-  this.uniqId = Math.floor(Math.random() * 100000);
-
   if (opts.debug) {
     this.logger = intel.getLogger();
   } else {
@@ -102,10 +100,9 @@ function Modem(opts) {
   }
 
   this.logger.basicConfig({
-    format: '[%(date)s] %(levelname)s Modem ' + this.uniqId + ': %(message)s',
+    format: '[%(date)s] %(levelname)s modem: %(message)s',
     level: opts.debug ? intel.DEBUG : intel.ERROR
   });
-  this.logger.debug('Modem created with uniqId: %d', this.uniqId);
   this.resetVars();
 }
 util.inherits(Modem, EventEmitter);
@@ -148,7 +145,7 @@ Modem.prototype.connect = function (cb) {
  */
 Modem.prototype.connectPort = function (port, cb) {
   var serialPort = new SerialPort(port, {
-    baudrate: 19200
+    baudrate: 115200
   });
 
   var commandTimeout = null;
@@ -165,13 +162,22 @@ Modem.prototype.connectPort = function (port, cb) {
     }.bind(this), 5000);
   }.bind(this));
 
-  serialPort.once('data', function (data) {
-    this.logger.debug('Inroduction data: %s', data.toString().trim());
-    if (data.toString().indexOf('OK') !== -1) {
-      clearTimeout(commandTimeout);
-      this.onPortConnected(serialPort, 1, cb);
+  var buf = new Buffer(256), bufCursor = 0;
+  var onData = function (data) {
+    data.copy(buf, bufCursor);
+    bufCursor += data.length;
+    if (buf[bufCursor - 1] === 13 || buf[bufCursor - 1] === 10) {
+      var str = buf.slice(0,bufCursor).toString();
+      this.logger.debug('AT response: %s', str.trim());
+       serialPort.removeListener('data', onData);
+      if (str.indexOf('OK') !== -1 || str.indexOf('AT') !== -1) {
+        clearTimeout(commandTimeout);
+        this.onPortConnected(serialPort, 1, cb);
+      }
     }
-  }.bind(this));
+  };
+
+  serialPort.on('data', onData.bind(this));
 
   serialPort.on('error', function (err) {
     this.logger.error('Port connect error: %s', err.message);
@@ -200,17 +206,17 @@ Modem.prototype.onPortConnected = function (port, dataMode, cb) {
     port.on('error', this.serialPortError.bind(this));
     port.on('close', this.serialPortClosed.bind(this));
 
-    var buf = new Buffer(1024);
+    var buf = new Buffer(256*1024);
     var cursor = 0;
     this.buffers.push(buf);
     this.bufferCursors.push(cursor);
 
-    port.flush(function () {
+    //port.flush(function () {
       port.on('data', this.onData.bind(this, port, this.buffers.length - 1));
       if (1 === dataMode) {
         this.dataPort = port;
       }
-    }.bind(this));
+    //}.bind(this));
   }
 
   if (this.portErrors + this.portConnected === this.ports.length) {
@@ -245,8 +251,12 @@ Modem.prototype.close = function (cb) {
   var i = 0;
   this.logger.debug('Modem disconnect called');
   this.connected = false;
-  for (i; i < this.serialPorts.length; ++i) {
-    this.serialPorts[i].close(this.onClose.bind(this, cb));
+  try {
+    for (i; i < this.serialPorts.length; ++i) {
+      this.serialPorts[i].close(this.onClose.bind(this, cb));
+    }
+  } catch (err) {
+    this.logger.error('Error closing modem: %s', err.message);
   }
 };
 /**
@@ -453,9 +463,10 @@ Modem.prototype.configureModem = function (cb) {
   this.setTextMode(false);
   this.disableStatusNotifications();
   this.sendCommand('AT+CNMI=2,1,0,2,0');
+  this.sendCommand('AT+CMEE=1'); //Enable error result codes
   this.getManufacturer(function (err, manufacturer) {
     if (!err) {
-      this.manufacturer = manufacturer.toUpperCase();
+      this.manufacturer = manufacturer.toUpperCase().trim();
     }
   }.bind(this));
 
@@ -476,7 +487,7 @@ Modem.prototype.configureModem = function (cb) {
           cb();
         }.bind(this));
       } else {
-        cb(new Error('Unable to set storages'));
+        cb();
       }
     }.bind(this));
   }.bind(this));
@@ -875,7 +886,7 @@ Modem.prototype.readDeleteZTE_SR = function (cb) {
  * Requests custom USSD
  */
 Modem.prototype.getUSSD = function (ussd, cb) {
-  if (this.manufacturer.indexOf('ZTE') === -1) {
+  if (this.manufacturer.indexOf('HUAWEI') !== -1) {
     ussd = Pdu.ussdEncode(ussd);
   }
   this.sendCommand('AT+CUSD=1,"' + ussd + '",15', function (data) {

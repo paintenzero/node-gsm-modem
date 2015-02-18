@@ -56,6 +56,7 @@ Checked on modems
 * Huawei E1550
 * ZTE MF656A
 * ZTE MF180
+* Wavecom WISMO2C
 
 TODO
 ====

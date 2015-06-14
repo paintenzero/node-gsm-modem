@@ -538,7 +538,7 @@ Modem.prototype.getSMSCenter = function (cb) {
   "use strict";
   this.sendCommand('AT+CSCA?', function (data) {
     if (typeof cb === 'function') {
-      var match = data.match(/\+CSCA:\s*"?([0-9]*)"?,(\d*)/);
+      var match = data.match(/\+CSCA:\s*"(.?[0-9]*)".?,(\d*)/);
       if (match) {
         cb(undefined, match[1]);
       } else {
@@ -806,6 +806,14 @@ Modem.prototype.sendSMS = function (message, cb) {
     }
     else {
       opts.receiver_type = 0x81;
+    }
+
+    if(message.smsc.indexOf("+") === 0) {
+      message.smsc = message.smsc.substring(1);
+      opts.smsc_type = 0x91;
+    }
+    else {
+      opts.smsc_type = 0x81;
     }
 
     if (opts.encoding === undefined) {

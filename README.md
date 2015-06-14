@@ -54,6 +54,7 @@ Checked on modems
 * Huawei 3121S
 * Huawei E171 / E173
 * Huawei E1550
+* Huawei K3765
 * ZTE MF656A
 * ZTE MF180
 * Wavecom WISMO2C

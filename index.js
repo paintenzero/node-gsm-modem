@@ -98,6 +98,8 @@ function Modem(opts) {
 
   this.forever = opts.forever;
 
+  this.connectingHandle;
+
   this.logger = intel.getLogger();
   if (opts.debug) {
       this.logger.setLevel(intel.DEBUG);
@@ -235,7 +237,7 @@ Modem.prototype.onPortConnected = function (port, dataMode, cb) {
       }
       if(this.forever) {
         //Retry connecting in 1 sec
-        setTimeout(function() {
+        this.connectingHandle = setTimeout(function() {
           this.logger.debug("Retrying to connect...");
           this.resetVars();
           this.connect(cb);
@@ -272,6 +274,7 @@ Modem.prototype.close = function (cb) {
   var i = 0;
   this.logger.debug('Modem disconnect called');
   this.connected = false;
+
   try {
     for (i; i < this.serialPorts.length; ++i) {
       this.serialPorts[i].close(this.onClose.bind(this, cb));
@@ -280,6 +283,16 @@ Modem.prototype.close = function (cb) {
     this.logger.error('Error closing modem: %s', err.message);
   }
 };
+/**
+ * Stops the reconnection loop and disconnects the modem if it is connected
+ */
+Modem.prototype.stopForever = function() {
+  this.forever = false;
+  if(this.connectingHandle) {
+    clearTimeout(this.connectingHandle);
+  }
+  this.close();
+}
 /**
  * Is called when the port is closed
  */

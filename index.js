@@ -800,9 +800,14 @@ Modem.prototype.sendSMS = function (message, cb) {
 
   if (!this.textMode) {
     var opts = message;
-    if (opts.receiver_type === undefined) {
+    if(message.receiver.indexOf("+") === 0) {
+      message.receiver = message.receiver.substring(1);
       opts.receiver_type = 0x91;
     }
+    else {
+      opts.receiver_type = 0x81;
+    }
+
     if (opts.encoding === undefined) {
       opts.encoding = isGSMAlphabet(opts.text) ? '7bit' : '16bit';
     }

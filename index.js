@@ -450,6 +450,16 @@ Modem.prototype.handleNotification = function (line) {
     }
     handled = true;
   }
+  else if(line.substr(0, 8) == '+CLIP: "') {
+    match = line.match(/\+CLIP: "(.*)"/);
+    if(match) {
+      this.emit('call', match[1]);
+    }
+    handled = true;
+  }
+  else if(line.substr(0, 5) === '^CEND') {
+    handled = true;
+  }
   return handled;
 };
 /**
@@ -462,6 +472,7 @@ Modem.prototype.configureModem = function (cb) {
   this.disableStatusNotifications();
   this.sendCommand('AT+CNMI=2,1,0,2,0');
   this.sendCommand('AT+CMEE=1'); //Enable error result codes
+  this.sendCommand('AT+CVHU=0'); //Enable modem to hangup voice calls
   this.getManufacturer(function (err, manufacturer) {
     if (!err) {
       this.manufacturer = manufacturer.toUpperCase().trim();
@@ -1009,6 +1020,37 @@ Modem.prototype.getOperator = function (text, cb) {
       } else {
         cb(new Error('GET OPERATOR NOT SUPPORTED'));
       }
+    }
+  }.bind(this));
+};
+/**
+ * Returns if caller id is supported through emission of +CLIP messages
+ * @param cb to call on completion
+ */
+Modem.prototype.getIsCallerIdSupported = function (cb) {
+  "use strict";
+  this.sendCommand('AT+CLIP=?', function (data) {
+    var match = data.match(/\+CLIP: \((.*)\)/);
+    if (typeof cb === 'function') {
+      if (match) {
+        cb(undefined, match[1] === "0-1");
+      } else {
+        cb(new Error('GET CALLER ID NOT SUPPORTED'));
+      }
+    }
+  }.bind(this));
+};
+/**
+ * Enables/disables caller id detection through +CLIP 
+ * @param cb to call on completion
+ */
+Modem.prototype.setSendCallerId = function (val, cb) {
+  "use strict";
+  this.sendCommand('AT+CLIP=' + (val ? "1" : "0"), function (data) {
+    if (data.indexOf('OK') === -1) {
+      cb(new Error(data));
+    } else {
+        cb(undefined);
     }
   }.bind(this));
 };

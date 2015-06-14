@@ -460,6 +460,14 @@ Modem.prototype.handleNotification = function (line) {
   else if(line.substr(0, 5) === '^CEND') {
     handled = true;
   }
+  else if(line.substr(0,10) === '^DSFLOWRPT') {
+    //These events are emitted by modem when it is connected to internet through ppp
+    //See: http://www.sakis3g.com/
+    handled = true;
+  }
+  else if(line.substr(0,5) === '^BOOT') {
+    handled = true;
+  }
   return handled;
 };
 /**

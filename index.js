@@ -5,6 +5,8 @@ var EventEmitter = require('events').EventEmitter;
 var util = require('util');
 var intel = require('intel');
 
+
+
 /**
  * Hayes command structure
  */
@@ -52,6 +54,7 @@ function isGSMAlphabet(text) {
  * Constructor for the modem
  * Possible options:
  *  ports
+ *  forever (if set to true, will keep trying to connect to modem even after it is disconnected. This can facilitate running this module as a daemon)
  *  debug
  *  auto_hangup
  *  ussdTimeout
@@ -93,6 +96,8 @@ function Modem(opts) {
   this.ussdTimeout = opts.ussdTimeout || 15000;
   this.commandsTimeout = opts.commandsTimeout || 15000;
 
+  this.forever = opts.forever;
+
   this.logger = intel.getLogger();
   if (opts.debug) {
       this.logger.setLevel(intel.DEBUG);
@@ -133,8 +138,6 @@ Modem.prototype.resetVars = function () {
 Modem.prototype.connect = function (cb) {
   "use strict";
   var i = 0;
-  this.portConnected = 0;
-  this.portErrors = 0;
   for (i; i < this.ports.length; ++i) {
     this.connectPort(this.ports[i], cb);
   }
@@ -160,7 +163,7 @@ Modem.prototype.connectPort = function (port, cb) {
     }.bind(this), 5000);
   }.bind(this));
 
-  var buf = new Buffer(256), bufCursor = 0;
+  var buf = new Buffer(256*1024), bufCursor = 0;
   var onData = function (data) {
     data.copy(buf, bufCursor);
     bufCursor += data.length;
@@ -178,7 +181,10 @@ Modem.prototype.connectPort = function (port, cb) {
   serialPort.on('data', onData.bind(this));
 
   serialPort.on('error', function (err) {
-    this.logger.error('Port connect error: %s', err.message);
+    if(!this.forever) {
+      this.logger.error('Port connect error: %s', err.message);
+    }
+    
     if (null !== commandTimeout) {
       clearTimeout(commandTimeout);
     }
@@ -219,9 +225,22 @@ Modem.prototype.onPortConnected = function (port, dataMode, cb) {
 
   if (this.portErrors + this.portConnected === this.ports.length) {
     if (null === this.dataPort) {
-      this.logger.error('No data port found');
+      if(!this.forever) {
+        this.logger.error('No data port found');
+      }
+      
       this.close();
-      cb(new Error('NOT CONNECTED'));
+      if (typeof cb === 'function') {
+        cb(new Error('NOT CONNECTED'));
+      }
+      if(this.forever) {
+        //Retry connecting in 1 sec
+        setTimeout(function() {
+          this.logger.debug("Retrying to connect...");
+          this.resetVars();
+          this.connect(cb);
+        }.bind(this, cb), 1000);
+      }
     } else {
       this.logger.debug('Connected, start configuring. Ports: ', this.serialPorts.length);
       this.connected = true;
@@ -240,6 +259,10 @@ Modem.prototype.serialPortClosed = function () {
     ++this.portCloses;
     this.logger.debug('Serial port closed. Emit disconnect');
     this.emit('disconnect');
+  }
+  if(this.forever) {
+    this.resetVars();
+    this.connect();
   }
 };
 /**
@@ -478,37 +501,51 @@ Modem.prototype.configureModem = function (cb) {
   this.setEchoMode(false);
   this.setTextMode(false);
   this.disableStatusNotifications();
-  this.sendCommand('AT+CNMI=2,1,0,2,0');
-  this.sendCommand('AT+CMEE=1'); //Enable error result codes
-  this.sendCommand('AT+CVHU=0'); //Enable modem to hangup voice calls
-  this.getManufacturer(function (err, manufacturer) {
-    if (!err) {
-      this.manufacturer = manufacturer.toUpperCase().trim();
-      if (this.manufacturer === 'OK') this.manufacturer = 'HUAWEI';
-    }
-  }.bind(this));
 
-  this.getStorages(function (err, storages) {
-    var i, supportOutboxME = false, supportInboxME = false;
-    if (!err) {
-      for (i = 0; i < storages.outbox.length; ++i) {
-        if (storages.outbox[i] === '"ME"') { supportOutboxME = true; break; }
-      }
-      for (i = 0; i < storages.inbox.length; ++i) {
-        if (storages.inbox[i] === '"ME"') { supportInboxME = true; break; }
-      }
+  this.sendCommand('AT+CNMI=2,1,0,2,0', function (err, data) {
+    if(data && data.indexOf("ERROR") >= 0) {
+      //This command resulted in an error, we should try to configure the modem a little later
+      this.logger.debug('Waiting for modem to be ready...');
+      setTimeout(this.configureModem.bind(this, cb), 1000);
+      return;
     }
-    this.setInboxOutboxStorage(supportInboxME ? "ME" : "SM", supportOutboxME ? "ME" : "SM", function (err) {
-      if (!err) {
-        this.getCurrentMessageStorages(function (err, storages) {
-          this.storages = storages;
-          cb();
+    else {
+        this.sendCommand('AT+CMEE=1');
+        this.sendCommand('AT+CVHU=0'); 
+        this.getManufacturer(function (err, manufacturer) {
+          if (!err) {
+            this.manufacturer = manufacturer.toUpperCase().trim();
+            if (this.manufacturer === 'OK') this.manufacturer = 'HUAWEI';
+          }
         }.bind(this));
-      } else {
-        cb();
-      }
-    }.bind(this));
-  }.bind(this));
+
+        this.getStorages(function (err, storages) {
+          var i, supportOutboxME = false, supportInboxME = false;
+          if (!err) {
+            for (i = 0; i < storages.outbox.length; ++i) {
+              if (storages.outbox[i] === '"ME"') { supportOutboxME = true; break; }
+            }
+            for (i = 0; i < storages.inbox.length; ++i) {
+              if (storages.inbox[i] === '"ME"') { supportInboxME = true; break; }
+            }
+          }
+          this.setInboxOutboxStorage(supportInboxME ? "ME" : "SM", supportOutboxME ? "ME" : "SM", function (err) {
+            if (!err) {
+              this.getCurrentMessageStorages(function (err, storages) {
+                this.storages = storages;
+                if(typeof cb === 'function') {
+                  cb();
+                }
+                this.emit('connected');
+              }.bind(this));
+            } else {
+              this.logger.debug('Waiting for modem to be ready...');
+              setTimeout(this.configureModem.bind(this, cb), 1000);
+            }
+          }.bind(this));
+        }.bind(this));
+    }
+  }.bind(this, cb));
 };
 /**
  * Disables ^RSSI status notifications

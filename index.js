@@ -440,6 +440,10 @@ Modem.prototype.handleNotification = function (line) {
   "use strict";
   var handled = false, match, smsId, storage;
 
+  if(!this.messageParts) {
+    this.messageParts = {};
+  }
+  
   if (line.substr(0, 5) === '+CMTI') {
     match = line.match(/\+CMTI:\s*"?([A-Za-z0-9]+)"?,(\d+)/);
     if (null !== match && match.length > 2) {
@@ -453,7 +457,41 @@ Modem.prototype.handleNotification = function (line) {
               this.logger.error('Unable to delete incoming message!!', err.message);
             }
           });
-          this.emit('message', msg);
+          if(msg.udh && msg.udh.parts && msg.udh.parts > 1) {
+            //We still emit a message
+            this.emit('message', msg);
+
+            //We should assemble this message before passing it on
+            if(!this.messageParts[msg.udh.reference_number]) {
+                this.messageParts[msg.udh.reference_number] = {};
+                this.messageParts[msg.udh.reference_number].parts_remaining = msg.udh.parts;
+                this.messageParts[msg.udh.reference_number].text = [];
+                for(var i=0; i<msg.udh.parts; i++) {
+                    this.messageParts[msg.udh.reference_number].text.push("");
+                }
+            }
+            this.messageParts[msg.udh.reference_number].text[msg.udh.current_part - 1] = msg.text;
+            this.messageParts[msg.udh.reference_number].parts_remaining--;
+            if(this.messageParts[msg.udh.reference_number].parts_remaining === 0) {
+                var nmsg = JSON.parse(JSON.stringify(msg));
+                
+                delete nmsg.smsc_tpdu;
+                delete nmsg.tpdu_type;
+                delete nmsg.udh;
+
+                nmsg.text = "";
+
+                for(var i=0; i<msg.udh.parts; i++) {
+                    nmsg.text += this.messageParts[msg.udh.reference_number].text[i];
+                }
+                delete this.messageParts[msg.udh.reference_number];
+                this.emit('messagereceived', nmsg);
+            }
+          }
+          else {
+            this.emit('message', msg);
+            this.emit('messagereceived', msg);
+          }
         }
       }.bind(this));
     }

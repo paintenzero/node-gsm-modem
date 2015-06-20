@@ -869,7 +869,7 @@ Modem.prototype.sendSMS = function (message, cb) {
 
   if (!this.textMode) {
     var opts = message;
-    if(message.receiver.indexOf("+") === 0) {
+    if(message.receiver && message.receiver.indexOf("+") === 0) {
       message.receiver = message.receiver.substring(1);
       opts.receiver_type = 0x91;
     }
@@ -877,7 +877,7 @@ Modem.prototype.sendSMS = function (message, cb) {
       opts.receiver_type = 0x81;
     }
 
-    if(message.smsc.indexOf("+") === 0) {
+    if(message.smsc && message.smsc.indexOf("+") === 0) {
       message.smsc = message.smsc.substring(1);
       opts.smsc_type = 0x91;
     }

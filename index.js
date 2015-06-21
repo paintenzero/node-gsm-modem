@@ -508,7 +508,52 @@ Modem.prototype.handleNotification = function (line) {
               this.logger.error('Unable to delete incoming report!!', err.message);
             }
           }.bind(this));
+         
           this.emit('report', msg);
+
+          var trackingObj = this.deliveryParts[msg.reference];
+          if(trackingObj) {
+            trackingObj.parts--;
+            if(!trackingObj.deliveryReports) {
+              trackingObj.deliveryReports = [];
+            }
+            trackingObj.deliveryReports.push(msg);
+            delete this.deliveryParts[msg.reference];
+          }
+
+          if(trackingObj && trackingObj.parts === 0) {
+            var reportObj = {};
+            reportObj.reports = trackingObj.deliveryReports;
+            reportObj.reports = reportObj.reports.sort(function(a, b) { return a.reference - b.reference });
+            reportObj.isDeliveredSuccessfully = true;
+            reportObj.references = [];
+            reportObj.reports.forEach(function (report) {
+                /* We handle only 00 as its the most common success scenario
+                0x00  Short message delivered successfully
+                0x01  Forwarded, but status unknown
+                0x02  Replaced
+                0x20  Congestion, still trying
+                0x21  Recipient busy, still trying
+                0x22  No response recipient, still trying
+                0x23  Service rejected, still trying
+                0x24  QOS not available, still trying
+                0x25  Recipient error, still trying
+                0x40  RPC Error
+                0x41  Incompatible destination
+                0x42  Connection rejected
+                0x43  Not obtainable
+                0x44  QOS not available
+                0x45  No internetworking available
+                0x46  Message expired
+                0x47  Message deleted by sender
+                0x48  Message deleted by SMSC
+                0x49  Does not exist */
+                reportObj.references.push(report.reference);
+                reportObj.isDeliveredSuccessfully = (reportObj.isDeliveredSuccessfully && report.status === "00");
+            });
+            trackingObj = null;
+            this.emit('reportreceived', reportObj);
+          }
         }
       }.bind(this));
     }
@@ -862,6 +907,13 @@ function PartsSendQueue(modem, parts, cb) {
   var currentPart = 0;
   var references = [];
 
+  if(!modem.deliveryParts) {
+    modem.deliveryParts = {};
+  }
+
+  var trackingObj = {};
+  trackingObj.parts = parts.length;
+
   this.sendNext = function () {
     if (currentPart >= parts.length) {
       if (typeof cb === 'function') {
@@ -877,7 +929,11 @@ function PartsSendQueue(modem, parts, cb) {
   this.onSend = function (data) {
     var match = data.match(/\+CMGS:\s*(\d+)/);
     if (match !== null && match.length > 1) {
-      references.push(parseInt(match[1], 10));
+      var ref = parseInt(match[1], 10);
+      references.push(ref);
+      trackingObj.references = references;
+      //all individual parts point to the same obj
+      modem.deliveryParts[ref] = trackingObj;
       this.sendNext();
     } else {
       if (typeof cb === 'function') {

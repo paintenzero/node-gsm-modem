@@ -10,6 +10,8 @@ Emil Sedgh for [PDU.js](https://github.com/emilsedgh/pdu). I had to change it th
 
 Chris Williams for [node-serialport](https://github.com/voodootikigod/node-serialport)
 
+[vchatterji](https://github.com/vchatterji) for contributing to the module
+
 Usage
 =====
 Install using npm:

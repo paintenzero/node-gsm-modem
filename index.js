@@ -5,6 +5,8 @@ var EventEmitter = require('events').EventEmitter;
 var util = require('util');
 var intel = require('intel');
 
+
+
 /**
  * Hayes command structure
  */
@@ -52,6 +54,7 @@ function isGSMAlphabet(text) {
  * Constructor for the modem
  * Possible options:
  *  ports
+ *  forever (if set to true, will keep trying to connect to modem even after it is disconnected. This can facilitate running this module as a daemon)
  *  debug
  *  auto_hangup
  *  ussdTimeout
@@ -93,6 +96,10 @@ function Modem(opts) {
   this.ussdTimeout = opts.ussdTimeout || 15000;
   this.commandsTimeout = opts.commandsTimeout || 15000;
 
+  this.forever = opts.forever;
+
+  this.connectingHandle;
+
   this.logger = intel.getLogger();
   if (opts.debug) {
       this.logger.setLevel(intel.DEBUG);
@@ -133,8 +140,6 @@ Modem.prototype.resetVars = function () {
 Modem.prototype.connect = function (cb) {
   "use strict";
   var i = 0;
-  this.portConnected = 0;
-  this.portErrors = 0;
   for (i; i < this.ports.length; ++i) {
     this.connectPort(this.ports[i], cb);
   }
@@ -160,7 +165,7 @@ Modem.prototype.connectPort = function (port, cb) {
     }.bind(this), 5000);
   }.bind(this));
 
-  var buf = new Buffer(256), bufCursor = 0;
+  var buf = new Buffer(256*1024), bufCursor = 0;
   var onData = function (data) {
     if (buf.length < data.length + bufCursor){ bufCursor = 0; return; }
     data.copy(buf, bufCursor);
@@ -179,7 +184,10 @@ Modem.prototype.connectPort = function (port, cb) {
   serialPort.on('data', onData.bind(this));
 
   serialPort.on('error', function (err) {
-    this.logger.error('Port connect error: %s', err.message);
+    if(!this.forever) {
+      this.logger.error('Port connect error: %s', err.message);
+    }
+
     if (null !== commandTimeout) {
       clearTimeout(commandTimeout);
     }
@@ -220,9 +228,22 @@ Modem.prototype.onPortConnected = function (port, dataMode, cb) {
 
   if (this.portErrors + this.portConnected === this.ports.length) {
     if (null === this.dataPort) {
-      this.logger.error('No data port found');
+      if(!this.forever) {
+        this.logger.error('No data port found');
+      }
+
       this.close();
-      cb(new Error('NOT CONNECTED'));
+      if (typeof cb === 'function') {
+        cb(new Error('NOT CONNECTED'));
+      }
+      if(this.forever) {
+        //Retry connecting in 1 sec
+        this.connectingHandle = setTimeout(function() {
+          this.logger.debug("Retrying to connect...");
+          this.resetVars();
+          this.connect(cb);
+        }.bind(this, cb), 1000);
+      }
     } else {
       this.logger.debug('Connected, start configuring. Ports: ', this.serialPorts.length);
       this.connected = true;
@@ -242,6 +263,10 @@ Modem.prototype.serialPortClosed = function () {
     this.logger.debug('Serial port closed. Emit disconnect');
     this.emit('disconnect');
   }
+  if(this.forever) {
+    this.resetVars();
+    this.connect();
+  }
 };
 /**
  * Closes connection to ports
@@ -250,6 +275,7 @@ Modem.prototype.close = function (cb) {
   var i = 0;
   this.logger.debug('Modem disconnect called');
   this.connected = false;
+
   try {
     for (i; i < this.serialPorts.length; ++i) {
       this.serialPorts[i].close(this.onClose.bind(this, cb));
@@ -258,6 +284,16 @@ Modem.prototype.close = function (cb) {
     this.logger.error('Error closing modem: %s', err.message);
   }
 };
+/**
+ * Stops the reconnection loop and disconnects the modem if it is connected
+ */
+Modem.prototype.stopForever = function() {
+  this.forever = false;
+  if(this.connectingHandle) {
+    clearTimeout(this.connectingHandle);
+  }
+  this.close();
+}
 /**
  * Is called when the port is closed
  */
@@ -405,6 +441,10 @@ Modem.prototype.handleNotification = function (line) {
   "use strict";
   var handled = false, match, smsId, storage;
 
+  if(!this.messageParts) {
+    this.messageParts = {};
+  }
+
   if (line.substr(0, 5) === '+CMTI') {
     match = line.match(/\+CMTI:\s*"?([A-Za-z0-9]+)"?,(\d+)/);
     if (null !== match && match.length > 2) {
@@ -418,7 +458,41 @@ Modem.prototype.handleNotification = function (line) {
               this.logger.error('Unable to delete incoming message!!', err.message);
             }
           });
-          this.emit('message', msg);
+          if(msg.udh && msg.udh.parts && msg.udh.parts > 1) {
+            //We still emit a message
+            this.emit('message', msg);
+
+            //We should assemble this message before passing it on
+            if(!this.messageParts[msg.udh.reference_number]) {
+                this.messageParts[msg.udh.reference_number] = {};
+                this.messageParts[msg.udh.reference_number].parts_remaining = msg.udh.parts;
+                this.messageParts[msg.udh.reference_number].text = [];
+                for(var i=0; i<msg.udh.parts; i++) {
+                    this.messageParts[msg.udh.reference_number].text.push("");
+                }
+            }
+            this.messageParts[msg.udh.reference_number].text[msg.udh.current_part - 1] = msg.text;
+            this.messageParts[msg.udh.reference_number].parts_remaining--;
+            if(this.messageParts[msg.udh.reference_number].parts_remaining === 0) {
+                var nmsg = JSON.parse(JSON.stringify(msg));
+
+                delete nmsg.smsc_tpdu;
+                delete nmsg.tpdu_type;
+                delete nmsg.udh;
+
+                nmsg.text = "";
+
+                for(var i=0; i<msg.udh.parts; i++) {
+                    nmsg.text += this.messageParts[msg.udh.reference_number].text[i];
+                }
+                delete this.messageParts[msg.udh.reference_number];
+                this.emit('messagereceived', nmsg);
+            }
+          }
+          else {
+            this.emit('message', msg);
+            this.emit('messagereceived', msg);
+          }
         }
       }.bind(this));
     }
@@ -435,7 +509,52 @@ Modem.prototype.handleNotification = function (line) {
               this.logger.error('Unable to delete incoming report!!', err.message);
             }
           }.bind(this));
+
           this.emit('report', msg);
+
+          var trackingObj = this.deliveryParts[msg.reference];
+          if(trackingObj) {
+            trackingObj.parts--;
+            if(!trackingObj.deliveryReports) {
+              trackingObj.deliveryReports = [];
+            }
+            trackingObj.deliveryReports.push(msg);
+            delete this.deliveryParts[msg.reference];
+          }
+
+          if(trackingObj && trackingObj.parts === 0) {
+            var reportObj = {};
+            reportObj.reports = trackingObj.deliveryReports;
+            reportObj.reports = reportObj.reports.sort(function(a, b) { return a.reference - b.reference });
+            reportObj.isDeliveredSuccessfully = true;
+            reportObj.references = [];
+            reportObj.reports.forEach(function (report) {
+                /* We handle only 00 as its the most common success scenario
+                0x00  Short message delivered successfully
+                0x01  Forwarded, but status unknown
+                0x02  Replaced
+                0x20  Congestion, still trying
+                0x21  Recipient busy, still trying
+                0x22  No response recipient, still trying
+                0x23  Service rejected, still trying
+                0x24  QOS not available, still trying
+                0x25  Recipient error, still trying
+                0x40  RPC Error
+                0x41  Incompatible destination
+                0x42  Connection rejected
+                0x43  Not obtainable
+                0x44  QOS not available
+                0x45  No internetworking available
+                0x46  Message expired
+                0x47  Message deleted by sender
+                0x48  Message deleted by SMSC
+                0x49  Does not exist */
+                reportObj.references.push(report.reference);
+                reportObj.isDeliveredSuccessfully = (reportObj.isDeliveredSuccessfully && report.status === "00");
+            });
+            trackingObj = null;
+            this.emit('reportreceived', reportObj);
+          }
         }
       }.bind(this));
     }
@@ -451,6 +570,24 @@ Modem.prototype.handleNotification = function (line) {
     }
     handled = true;
   }
+  else if(line.substr(0, 8) == '+CLIP: "') {
+    match = line.match(/\+CLIP: "(.*)"/);
+    if(match) {
+      this.emit('call', match[1]);
+    }
+    handled = true;
+  }
+  else if(line.substr(0, 5) === '^CEND') {
+    handled = true;
+  }
+  else if(line.substr(0,10) === '^DSFLOWRPT') {
+    //These events are emitted by modem when it is connected to internet through ppp
+    //See: http://www.sakis3g.com/
+    handled = true;
+  }
+  else if(line.substr(0,5) === '^BOOT') {
+    handled = true;
+  }
   return handled;
 };
 /**
@@ -461,35 +598,51 @@ Modem.prototype.configureModem = function (cb) {
   this.setEchoMode(false);
   this.setTextMode(false);
   this.disableStatusNotifications();
-  this.sendCommand('AT+CNMI=2,1,0,2,0');
-  this.sendCommand('AT+CMEE=1'); //Enable error result codes
-  this.getManufacturer(function (err, manufacturer) {
-    if (!err) {
-      this.manufacturer = manufacturer.toUpperCase().trim();
-    }
-  }.bind(this));
 
-  this.getStorages(function (err, storages) {
-    var i, supportOutboxME = false, supportInboxME = false;
-    if (!err) {
-      for (i = 0; i < storages.outbox.length; ++i) {
-        if (storages.outbox[i] === '"ME"') { supportOutboxME = true; break; }
-      }
-      for (i = 0; i < storages.inbox.length; ++i) {
-        if (storages.inbox[i] === '"ME"') { supportInboxME = true; break; }
-      }
+  this.sendCommand('AT+CNMI=2,1,0,2,0', function (err, data) {
+    if(data && data.indexOf("ERROR") >= 0) {
+      //This command resulted in an error, we should try to configure the modem a little later
+      this.logger.debug('Waiting for modem to be ready...');
+      setTimeout(this.configureModem.bind(this, cb), 1000);
+      return;
     }
-    this.setInboxOutboxStorage(supportInboxME ? "ME" : "SM", supportOutboxME ? "ME" : "SM", function (err) {
-      if (!err) {
-        this.getCurrentMessageStorages(function (err, storages) {
-          this.storages = storages;
-          cb();
+    else {
+        this.sendCommand('AT+CMEE=1');
+        this.sendCommand('AT+CVHU=0');
+        this.getManufacturer(function (err, manufacturer) {
+          if (!err) {
+            this.manufacturer = manufacturer.toUpperCase().trim();
+            if (this.manufacturer === 'OK') this.manufacturer = 'HUAWEI';
+          }
         }.bind(this));
-      } else {
-        cb();
-      }
-    }.bind(this));
-  }.bind(this));
+
+        this.getStorages(function (err, storages) {
+          var i, supportOutboxME = false, supportInboxME = false;
+          if (!err) {
+            for (i = 0; i < storages.outbox.length; ++i) {
+              if (storages.outbox[i] === '"ME"') { supportOutboxME = true; break; }
+            }
+            for (i = 0; i < storages.inbox.length; ++i) {
+              if (storages.inbox[i] === '"ME"') { supportInboxME = true; break; }
+            }
+          }
+          this.setInboxOutboxStorage(supportInboxME ? "ME" : "SM", supportOutboxME ? "ME" : "SM", function (err) {
+            if (!err) {
+              this.getCurrentMessageStorages(function (err, storages) {
+                this.storages = storages;
+                if(typeof cb === 'function') {
+                  cb();
+                }
+                this.emit('connected');
+              }.bind(this));
+            } else {
+              this.logger.debug('Waiting for modem to be ready...');
+              setTimeout(this.configureModem.bind(this, cb), 1000);
+            }
+          }.bind(this));
+        }.bind(this));
+    }
+  }.bind(this, cb));
 };
 /**
  * Disables ^RSSI status notifications
@@ -538,7 +691,7 @@ Modem.prototype.getSMSCenter = function (cb) {
   "use strict";
   this.sendCommand('AT+CSCA?', function (data) {
     if (typeof cb === 'function') {
-      var match = data.match(/\+CSCA:\s*"?([0-9]*)"?,(\d*)/);
+      var match = data.match(/\+CSCA:\s*"(.?[0-9]*)".?,(\d*)/);
       if (match) {
         cb(undefined, match[1]);
       } else {
@@ -755,6 +908,13 @@ function PartsSendQueue(modem, parts, cb) {
   var currentPart = 0;
   var references = [];
 
+  if(!modem.deliveryParts) {
+    modem.deliveryParts = {};
+  }
+
+  var trackingObj = {};
+  trackingObj.parts = parts.length;
+
   this.sendNext = function () {
     if (currentPart >= parts.length) {
       if (typeof cb === 'function') {
@@ -770,7 +930,11 @@ function PartsSendQueue(modem, parts, cb) {
   this.onSend = function (data) {
     var match = data.match(/\+CMGS:\s*(\d+)/);
     if (match !== null && match.length > 1) {
-      references.push(parseInt(match[1], 10));
+      var ref = parseInt(match[1], 10);
+      references.push(ref);
+      trackingObj.references = references;
+      //all individual parts point to the same obj
+      modem.deliveryParts[ref] = trackingObj;
       this.sendNext();
     } else {
       if (typeof cb === 'function') {
@@ -800,9 +964,22 @@ Modem.prototype.sendSMS = function (message, cb) {
 
   if (!this.textMode) {
     var opts = message;
-    if (opts.receiver_type === undefined) {
+    if(message.receiver && message.receiver.indexOf("+") === 0) {
+      message.receiver = message.receiver.substring(1);
       opts.receiver_type = 0x91;
     }
+    else {
+      opts.receiver_type = 0x81;
+    }
+
+    if(message.smsc && message.smsc.indexOf("+") === 0) {
+      message.smsc = message.smsc.substring(1);
+      opts.smsc_type = 0x91;
+    }
+    else {
+      opts.smsc_type = 0x81;
+    }
+
     if (opts.encoding === undefined) {
       opts.encoding = isGSMAlphabet(opts.text) ? '7bit' : '16bit';
     }
@@ -996,6 +1173,37 @@ Modem.prototype.getOperator = function (text, cb) {
       } else {
         cb(new Error('GET OPERATOR NOT SUPPORTED'));
       }
+    }
+  }.bind(this));
+};
+/**
+ * Returns if caller id is supported through emission of +CLIP messages
+ * @param cb to call on completion
+ */
+Modem.prototype.getIsCallerIdSupported = function (cb) {
+  "use strict";
+  this.sendCommand('AT+CLIP=?', function (data) {
+    var match = data.match(/\+CLIP: \((.*)\)/);
+    if (typeof cb === 'function') {
+      if (match) {
+        cb(undefined, match[1] === "0-1");
+      } else {
+        cb(new Error('GET CALLER ID NOT SUPPORTED'));
+      }
+    }
+  }.bind(this));
+};
+/**
+ * Enables/disables caller id detection through +CLIP
+ * @param cb to call on completion
+ */
+Modem.prototype.setSendCallerId = function (val, cb) {
+  "use strict";
+  this.sendCommand('AT+CLIP=' + (val ? "1" : "0"), function (data) {
+    if (data.indexOf('OK') === -1) {
+      cb(new Error(data));
+    } else {
+        cb(undefined);
     }
   }.bind(this));
 };

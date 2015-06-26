@@ -154,7 +154,7 @@ Modem.prototype.connectPort = function (port, cb) {
         clearTimeout(commandTimeout);
         this.onPortConnected(serialPort, -1, cb);
       }
-    }.bind(this));
+    });
     commandTimeout = setTimeout(function () {
       this.onPortConnected(serialPort, 0, cb);
     }.bind(this), 5000);
@@ -162,6 +162,7 @@ Modem.prototype.connectPort = function (port, cb) {
 
   var buf = new Buffer(256), bufCursor = 0;
   var onData = function (data) {
+    if (buf.length < data.length + bufCursor){ bufCursor = 0; return; }
     data.copy(buf, bufCursor);
     bufCursor += data.length;
     if (buf[bufCursor - 1] === 13 || buf[bufCursor - 1] === 10) {
@@ -465,7 +466,6 @@ Modem.prototype.configureModem = function (cb) {
   this.getManufacturer(function (err, manufacturer) {
     if (!err) {
       this.manufacturer = manufacturer.toUpperCase().trim();
-      if (this.manufacturer === 'OK') this.manufacturer = 'HUAWEI';
     }
   }.bind(this));
 

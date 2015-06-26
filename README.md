@@ -45,6 +45,8 @@ __commandTimeout__: milliseconds, how long to wait for response on any AT comman
 
 __ussdTimeout__: milliseconds, how long to wait for USSD after sending the command. _Default: 15000_
 
+__forever__: boolean, indicated whether module should run in daemon mode automatically handling modem connects and disconnects. _Default: false_
+
 API
 ===
 See wiki [page](https://github.com/paintenzero/node-gsm-modem/wiki/api).
@@ -54,6 +56,7 @@ Checked on modems
 * Huawei 3121S
 * Huawei E171 / E173
 * Huawei E1550
+* Huawei K3765
 * ZTE MF656A
 * ZTE MF180
 * Wavecom WISMO2C

@@ -1,11 +1,11 @@
 {
   "name": "gsm-modem",
   "description": "A package for controlling gsm modem connected to serial port using AT commands",
-  "version": "0.3.19",
+  "version": "0.3.20",
   "author": "Sergey Birukov <sergeyb26@gmail.com>",
   "dependencies": {
-    "intel": "^1.0.2",
-    "serialport": "^2.0.5"
+    "intel": "1.2.0",
+    "serialport": "7.0.2"
   },
   "engines": {
     "node": ">=0.10"

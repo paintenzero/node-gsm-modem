@@ -1410,48 +1410,4 @@ func main() {
 
 // Note: The main() function is for temporary testing and will be removed or adapted.
 // The core logic is in the structs and parsing/utility functions.
-// The `decode7Bit` and its interaction with UDH fill bits is a known area needing refinement.Okay, I've created the `pdu.go` file with the initial set of structs, constants, and utility functions. I've also started implementing the main `ParsePDU` function, focusing initially on SMS-DELIVER and SMS-STATUS-REPORT types, as well as the helper functions for parsing components like SMSC, addresses, timestamps, UDH, and for decoding 7-bit, 8-bit, and UCS-2 user data.
-
-Here's a summary of what's been done:
-
-*   **File Creation:** `pdu.go` created.
-*   **Structs Defined:** `SMSCInfo`, `UDHInfo`, `PDUData`, `StatusReportData`, `MessageToSend`, `OutgoingPDU`.
-*   **Constants:** `sevenBitDefault`, `sevenBitEsc`, `sevenBitEscapeCode` for 7-bit encoding.
-*   **Utility Functions:**
-    *   `swapNibbles`/`deSwapNibbles`: Implemented.
-    *   `parseTimestamp`: Implemented, with attention to timezone parsing (using standard interpretation, noted potential JS discrepancy).
-    *   `decodeAddress`/`encodeAddress`: Basic implementation for numeric addresses.
-    *   `parseSMSCPart`: Implemented.
-    *   `tpMTIToString`: Implemented.
-    *   `detectEncoding`: Implemented based on DCS.
-    *   `decode7Bit`: Implemented. **Crucially, as noted in the TODOs within the code, this version does not yet correctly handle the initial `fillBitsToSkip` that arise when UDH is present and its length in octets is not a multiple of 7. This will need refinement.**
-    *   `decode8Bit`: Implemented (assumes Latin-1 like mapping for now).
-    *   `decode16Bit`: Implemented for UCS-2.
-    *   `parseUDH`: Implemented to extract concatenated message info (8-bit and 16-bit references).
-    *   `statusToString`: Implemented to get human-readable status from TP-ST.
-*   **Main Parsing Function (`ParsePDU`)**:
-    *   Started implementation, handling:
-        *   SMSC information.
-        *   TPDU First Octet.
-        *   SMS-DELIVER: Parsing sender address, PID, DCS, SCTS, UDL, and basic UD (with the known `decode7Bit` limitation regarding UDH fill bits).
-        *   SMS-STATUS-REPORT: Parsing MR, Recipient Address, SCTS, Discharge Time, and Status.
-        *   Placeholders for SMS-SUBMIT.
-    *   Includes logging for info and warnings.
-*   **Placeholders:** Stubs for `GeneratePDUs` and `EncodeUSSD` are present.
-*   **Testing:** A `main()` function is included with some preliminary test cases for individual functions and `ParsePDU`. This helps in iterative development and will be removed or adapted later.
-
-**Next Steps & Known Issues:**
-
-1.  **Refine `decode7Bit` for UDH Fill Bits:** The most critical next step for parsing is to make `decode7Bit` correctly handle the `fillBitsToSkip` that occur when a UDH is present. This involves either:
-    *   Modifying `decode7Bit` to accept an `initialBitShift` parameter.
-    *   The caller (`ParsePDU`) meticulously prepares `dataHex` by bit-shifting the start of the user data hex string if there are fill bits. The former is cleaner.
-2.  **Complete `ParsePDU` for SMS-SUBMIT:** Add full parsing for SMS-SUBMIT PDUs.
-3.  **Implement PDU Generation:**
-    *   `encode7Bit`, `encode16Bit`, `encode8Bit` (for generating PDU user data).
-    *   Logic for constructing UDH for multipart messages.
-    *   The main `GeneratePDUs` function to assemble all parts.
-4.  **Implement `EncodeUSSD`**.
-5.  **Thorough Testing:** Add comprehensive unit tests for all parsing and generation logic, covering various PDU types, encodings, UDH scenarios, and edge cases.
-
-This is a good foundation. I'll proceed with these refinements in subsequent steps.
-I will now submit the current state.
+// The `decode7Bit` and its interaction with UDH fill bits is a known area needing refinement.

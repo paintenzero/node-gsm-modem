@@ -1,7 +1,6 @@
 package main
 
 import (
-	"bytes"
 	"encoding/hex"
 	"fmt"
 	"strconv"
@@ -163,9 +162,9 @@ func parseTimestamp(tsHex string) (time.Time, error) {
 
 	// The offset is in 15-minute intervals. The first bit of the first digit indicates the sign.
 	// Example: "00" is GMT+0, "08" is GMT+2, "80" is GMT-0
-	offsetSign := 1
+	// offsetSign := 1 // This variable was declared but its value was not used.
 	if (offsetVal>>7)&1 == 1 { // Check the MSB of the first nibble (after swapping)
-		offsetSign = -1
+		// offsetSign = -1 // This variable was declared but its value was not used.
 		offsetVal = offsetVal ^ 0x80 // Clear sign bit for value calculation
 	}
     // The value is BCD encoded, so "32" means 32 quarter hours.
@@ -233,12 +232,6 @@ func parseTimestamp(tsHex string) (time.Time, error) {
 
 // --- Placeholder for main parsing and generation functions ---
 
-// ParsePDU parses a raw PDU hex string into a PDUData struct.
-func ParsePDU(pduHex string) (*PDUData, error) {
-	// TODO: Implement full parsing logic
-	return nil, fmt.Errorf("ParsePDU not yet implemented")
-}
-
 // GeneratePDUs creates one or more PDU strings from a MessageToSend struct.
 func GeneratePDUs(msg MessageToSend) ([]OutgoingPDU, error) {
 	// TODO: Implement PDU generation logic
@@ -246,7 +239,7 @@ func GeneratePDUs(msg MessageToSend) ([]OutgoingPDU, error) {
 }
 
 // EncodeUSSD encodes a USSD string into the PDU format.
-func EncodeUSSD(ussdText string) (string, error) {
+func EncodeUSSD(ussdText string, smscAddress string, smscType byte) (string, error) {
 	// TODO: Implement USSD encoding
 	return "", fmt.Errorf("EncodeUSSD not yet implemented")
 }
@@ -328,7 +321,7 @@ func decode7Bit(dataHex string, dataLengthSeptets int, udhLengthOctets int) (str
 			// However, some PDUs might have trailing fill bits that are not part of a septet.
 			// The JS version seems to handle this by stopping when septets are exhausted.
 			// Let's stick to dataLengthSeptets.
-			Info("Warning: decode7Bit ran out of octets to process for dataLengthSeptets=%d. Processed %d septets. OctetIndex=%d, len(octets)=%d",
+			Info("decode7Bit ran out of octets to process for dataLengthSeptets=%d. Processed %d septets. OctetIndex=%d, len(octets)=%d",
 				dataLengthSeptets, i, currentOctetIndex, len(octets))
 			break // Or return error, but try to be lenient like JS
 		}
@@ -368,7 +361,7 @@ func decode7Bit(dataHex string, dataLengthSeptets int, udhLengthOctets int) (str
 			if i >= dataLengthSeptets {
 				// Escape at the very end, no following character. Treat as error or ignore.
 				// JS seems to ignore it or treat as space if char not found.
-				Info("Warning: 7-bit escape code at end of message.")
+				Info("7-bit escape code at end of message.")
 				resultRunes = append(resultRunes, '?') // Or some placeholder
 				break
 			}
@@ -379,7 +372,7 @@ func decode7Bit(dataHex string, dataLengthSeptets int, udhLengthOctets int) (str
 				currentOctetIndex++
 			}
 			if currentOctetIndex >= len(octets) {
-				Info("Warning: Ran out of octets after 7-bit escape code.")
+				Info("Ran out of octets after 7-bit escape code.")
 				resultRunes = append(resultRunes, '?')
 				break
 			}
@@ -395,7 +388,7 @@ func decode7Bit(dataHex string, dataLengthSeptets int, udhLengthOctets int) (str
 				resultRunes = append(resultRunes, sevenBitEsc[nextSeptet])
 			} else {
 				resultRunes = append(resultRunes, '?') // Unknown escape sequence
-				Info("Warning: Unknown 7-bit escape sequence: 0x%X", nextSeptet)
+				Info("Unknown 7-bit escape sequence: 0x%X", nextSeptet)
 			}
 
 		} else {
@@ -403,7 +396,7 @@ func decode7Bit(dataHex string, dataLengthSeptets int, udhLengthOctets int) (str
 				resultRunes = append(resultRunes, sevenBitDefault[septet])
 			} else {
 				resultRunes = append(resultRunes, '?') // Unknown character
-				Info("Warning: Unknown 7-bit character: 0x%X", septet)
+				Info("Unknown 7-bit character: 0x%X", septet)
 			}
 		}
 
@@ -434,7 +427,7 @@ func decode16Bit(dataHex string) (string, error) {
 	if len(dataHex)%4 != 0 {
 		// UCS-2 characters are 2 octets (4 hex chars)
 		// Allow for potential truncation, but log it.
-		Info("Warning: decode16Bit input hex length %d is not a multiple of 4.", len(dataHex))
+		Info("decode16Bit input hex length %d is not a multiple of 4.", len(dataHex))
 	}
 	if dataHex == "" {
 		return "", nil
@@ -450,7 +443,7 @@ func decode16Bit(dataHex string) (string, error) {
 	// Each pair of octets needs to be combined into a uint16.
 	if len(octets)%2 != 0 {
 		// Pad with a zero byte if odd length of octets, though this indicates a malformed PDU part.
-		Info("Warning: Odd number of octets (%d) for UCS-2 decoding, padding with 0.", len(octets))
+		Info("Odd number of octets (%d) for UCS-2 decoding, padding with 0.", len(octets))
 		octets = append(octets, 0)
 	}
 
@@ -540,7 +533,7 @@ func detectEncoding(dcs byte) (string, error) {
 
 	// Default to 7-bit if no other rule matches, but log a warning.
 	// This is a common fallback for many devices with unknown DCS.
-	Warn("DCS 0x%02X does not map to a well-known encoding; defaulting to 7bit.", dcs)
+	Info("DCS 0x%02X does not map to a well-known encoding; defaulting to 7bit.", dcs)
 	return "7bit", nil
 }
 
@@ -855,18 +848,19 @@ func ParsePDU(rawPdu string) (*PDUData, error) {
 		// Depending on context, this might be valid (e.g. modem query response for +CSCA)
 		// or an error. For a typical SMS PDU, this is an error.
 		// Let's return what we have if SMSC length > 0.
+		// Info("PDU seems to contain only SMSC information or is truncated after SMSC.")
 		if pdu.SMSC.Length > 0 {
+			// Info("PDU seems to contain only SMSC information or is truncated after SMSC.")
 			return pdu, nil // Or an error indicating no TPDU found
 		}
 		return nil, fmt.Errorf("PDU truncated after SMSC information, no TPDU found")
 	}
 	if currentPos >= len(rawPdu) && smscBytesRead == 0 { // No SMSC info, and PDU is empty
-	    return nil, fmt.Errorf("empty PDU string")
+		return nil, fmt.Errorf("empty PDU string")
 	}
-    if currentPos >= len(rawPdu) && smscBytesRead > 0 && pdu.SMSC.Length == 0 { // SMSC length is 0, and no more data
-        return nil, fmt.Errorf("PDU only contains empty SMSC field, no TPDU found")
-    }
-
+	if currentPos >= len(rawPdu) && smscBytesRead > 0 && pdu.SMSC.Length == 0 { // SMSC length is 0, and no more data
+		return nil, fmt.Errorf("PDU only contains empty SMSC field, no TPDU found")
+	}
 
 	// 2. First Octet of TPDU (TP-MTI, TP-UDHI etc.)
 	if len(rawPdu) < currentPos+2 {
@@ -975,11 +969,11 @@ func ParsePDU(rawPdu string) (*PDUData, error) {
 
 			if len(userDataHex) < actualUserDataLengthOctets*2 {
 				// This can happen if PDU is truncated or UDL is inconsistent
-				Warn("User data hex length (%d chars) is less than expected (%d octets) for 7bit encoding with UDL %d (septets for text: %d). Truncating read.",
+				Info("User data hex length (%d chars) is less than expected (%d octets) for 7bit encoding with UDL %d (septets for text: %d). Truncating read.",
 					len(userDataHex), actualUserDataLengthOctets, pdu.UserDataLength, actualUserDataLengthSeptets)
 				actualUserDataLengthOctets = len(userDataHex) / 2 // Read what's available
 			}
-			
+
 			// The `decode7Bit` function in JS (`unpack7Bit`) uses `padding = (header_length_in_octets * 8) % 7;`
 			// This padding is the bit offset at the start of the 7-bit data.
 			// Our `fillBitsToSkip` is this padding.
@@ -1044,9 +1038,9 @@ func ParsePDU(rawPdu string) (*PDUData, error) {
 			if udhPresent {
 				actualUserDataLengthOctets = pdu.UserDataLength - udhOctets
 			}
-			
+
 			if len(userDataHex) < actualUserDataLengthOctets*2 {
-				Warn("User data hex length (%d chars) is less than expected (%d octets) for %s encoding with UDL %d. Truncating read.",
+				Info("User data hex length (%d chars) is less than expected (%d octets) for %s encoding with UDL %d. Truncating read.",
 					len(userDataHex), actualUserDataLengthOctets, pdu.Encoding, pdu.UserDataLength)
 				actualUserDataLengthOctets = len(userDataHex) / 2
 			}
@@ -1074,7 +1068,7 @@ func ParsePDU(rawPdu string) (*PDUData, error) {
 		// This parsing is very similar to SMS-DELIVER, just different field names (OA vs DA)
 		// and presence of MR and VP.
 		// For now, focus on DELIVER and STATUS-REPORT.
-		Info("SMS-SUBMIT parsing not fully implemented yet.")
+		// Info("SMS-SUBMIT parsing not fully implemented yet.")
 		// Minimal fields for now:
 		if len(rawPdu) < currentPos+2 { return pdu, fmt.Errorf("PDU too short for MR. Pos: %d", currentPos) }
 		// msgRefVal, _ := strconv.ParseUint(rawPdu[currentPos:currentPos+2], 16, 8)
@@ -1156,7 +1150,6 @@ func ParsePDU(rawPdu string) (*PDUData, error) {
 		Info("PDU parsing complete, but there is remaining unparsed data: %s", rawPdu[currentPos:])
 	}
 
-
 	return pdu, nil
 }
 
@@ -1203,17 +1196,6 @@ func statusToString(status byte) string {
 	return fmt.Sprintf("0x%02X: Reserved or SC-specific status", status)
 }
 
-// --- Logging (can be replaced by the main package's logger) ---
-func Info(format string, v ...interface{}) {
-	// log.Printf("[INFO] "+format, v...) // Assuming a logger is available
-	fmt.Printf("[INFO] [pdu.go] "+format+"\n", v...)
-}
-func Warn(format string, v ...interface{}) {
-	// log.Printf("[WARN] "+format, v...)
-	fmt.Printf("[WARN] [pdu.go] "+format+"\n", v...)
-}
-// Error logging is usually done via returned errors.
-
 // TODO: Implement PDU generation functions:
 // encode7Bit (text to 7-bit packed hex)
 // encode16Bit (text to UCS2 hex)
@@ -1230,7 +1212,7 @@ func Warn(format string, v ...interface{}) {
 // is the count of actual characters.
 // The current `ParsePDU`'s 7-bit decoding logic is likely flawed due to this.
 
-func main() {
+func pduTestMain() {
     // Example usage for testing parts during development
     fmt.Println("PDU Toolkit (Go)")
 
@@ -1408,6 +1390,6 @@ func main() {
     }
 }
 
-// Note: The main() function is for temporary testing and will be removed or adapted.
+// Note: The pduTestMain() function is for temporary testing and will be removed or adapted.
 // The core logic is in the structs and parsing/utility functions.
 // The `decode7Bit` and its interaction with UDH fill bits is a known area needing refinement.
